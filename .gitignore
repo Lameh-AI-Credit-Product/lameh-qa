@@ -1,0 +1,20 @@
+# Generated reports
+results/
+
+# Local test data exports (may contain client data)
+*.xlsx
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/

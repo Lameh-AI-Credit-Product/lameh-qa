@@ -25,3 +25,4 @@ dev = [
 
 [tool.poe.tasks]
 ratios = "python tests/integration/sector_analysis_ratios.py"
+ratios-summary = "python tests/integration/summarize_ratio_failures.py"

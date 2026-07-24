@@ -9,7 +9,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "openpyxl (>=3.1.5,<4.0.0)",
-    "pywin32 (>=312,<313) ; sys_platform == \"win32\""
+    "pywin32 (>=312,<313) ; sys_platform == \"win32\"",
+    "playwright (>=1.61.0,<2.0.0)"
 ]
 
 

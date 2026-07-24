@@ -21,6 +21,12 @@ This catches:
 Usage
 -----
     python3 verify_ratios.py path/to/export.xlsx [--tolerance 0.005] [--csv out.csv]
+    python3 verify_ratios.py --dir path/to/exports/ [--tolerance 0.005]
+
+--dir processes every .xlsx file directly under the given directory instead
+of a single file; a failure on one file is logged and does not stop the rest
+of the batch. --csv cannot be combined with --dir since each file needs its
+own report path (the default naming scheme is used for each).
 
 By default this runs two passes and (if --csv is given) writes two reports:
   - WEB:   whatever value is currently cached in the file (out-web.csv)
@@ -755,49 +761,24 @@ def _with_suffix(path, tag):
     return f"{base}{tag}{ext}"
 
 
-def main():
-    # Company names can contain non-ASCII (e.g. Arabic) text, which crashes on
-    # Windows consoles stuck on a legacy codepage (cp1252) unless stdout is
-    # explicitly put into UTF-8 mode.
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+def process_file(xlsx_path, tolerance, csv_base, fail_only, web_only):
+    """Run the WEB (and, unless web_only, EXCEL) verification pass for a single
+    .xlsx export and print/write the reports. `csv_base` is the base path used
+    to derive the "-web"/"-excel" CSV report paths (or None to skip CSV output)."""
+    web_csv = _with_suffix(csv_base, "-web") if csv_base else None
+    excel_csv = _with_suffix(csv_base, "-excel") if csv_base else None
 
-    ap = argparse.ArgumentParser(description="Verify Lameh Sector Analysis ratio export.")
-    ap.add_argument("xlsx_path")
-    ap.add_argument("--tolerance", type=float, default=TOLERANCE_DEFAULT,
-                     help="Relative tolerance (default 0.5%%)")
-    ap.add_argument("--csv", default=None,
-                     help="Optional base path to write CSV reports. Two files are written: "
-                          "<name>-web<ext> (cached export values) and <name>-excel<ext> "
-                          "(values after a real Excel recalculation). Defaults to "
-                          f"{DEFAULT_CSV_DIR}/<date>/<company name>.")
-    ap.add_argument("--fail-only", action="store_true",
-                     help="When writing --csv, include only non-PASS rows (FAIL / REPORTED-MISSING)")
-    ap.add_argument("--web-only", action="store_true",
-                     help="Skip the Excel-recalculation pass (no Excel/pywin32 required)")
-    args = ap.parse_args()
+    values_web, periods_web, source_rows_web = load_metric_values(xlsx_path)
+    check_values(xlsx_path, values_web, periods_web, source_rows_web,
+                 tolerance, web_csv, fail_only, label="WEB (cached export values)")
 
-    csv_base = args.csv
-    if csv_base is None:
-        date = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        company = get_company_name(args.xlsx_path)
-        filename = sanitize_filename(company) if company else "unknown-company"
-        csv_base = os.path.join(DEFAULT_CSV_DIR, date, f"{filename}.csv")
-
-    web_csv = _with_suffix(csv_base, "-web")
-    excel_csv = _with_suffix(csv_base, "-excel")
-
-    values_web, periods_web, source_rows_web = load_metric_values(args.xlsx_path)
-    check_values(args.xlsx_path, values_web, periods_web, source_rows_web,
-                 args.tolerance, web_csv, args.fail_only, label="WEB (cached export values)")
-
-    if args.web_only:
+    if web_only:
         return
 
     print("\n" + "=" * 70)
     print("Recalculating formulas with Excel (this opens Excel in the background)...")
     try:
-        recalculated_path = recalculate_with_excel(args.xlsx_path)
+        recalculated_path = recalculate_with_excel(xlsx_path)
     except Exception as e:
         print(f"Could not recalculate with Excel ({e}). Skipping the EXCEL report.\n"
               f"(Requires pywin32 and a local Excel installation - use --web-only to skip this.)")
@@ -807,10 +788,91 @@ def main():
         values_excel, periods_excel, source_rows_excel = load_metric_values(recalculated_path)
 
         print()
-        check_values(args.xlsx_path, values_excel, periods_excel, source_rows_excel,
-                     args.tolerance, excel_csv, args.fail_only, label="EXCEL (recalculated formulas)")
+        check_values(xlsx_path, values_excel, periods_excel, source_rows_excel,
+                     tolerance, excel_csv, fail_only, label="EXCEL (recalculated formulas)")
     finally:
         os.remove(recalculated_path)
+
+
+def default_csv_base(xlsx_path, date):
+    """Derive the default --csv base path for a single file: DEFAULT_CSV_DIR/<date>/<company>.csv"""
+    company = get_company_name(xlsx_path)
+    filename = sanitize_filename(company) if company else "unknown-company"
+    return os.path.join(DEFAULT_CSV_DIR, date, f"{filename}.csv")
+
+
+def iter_xlsx_files(dir_path):
+    """Yield .xlsx files directly under dir_path, sorted, skipping Excel's
+    temporary lock files (~$foo.xlsx)."""
+    for name in sorted(os.listdir(dir_path)):
+        if name.startswith("~$") or not name.lower().endswith(".xlsx"):
+            continue
+        yield os.path.join(dir_path, name)
+
+
+def main():
+    # Company names can contain non-ASCII (e.g. Arabic) text, which crashes on
+    # Windows consoles stuck on a legacy codepage (cp1252) unless stdout is
+    # explicitly put into UTF-8 mode.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+    ap = argparse.ArgumentParser(description="Verify Lameh Sector Analysis ratio export.")
+    ap.add_argument("xlsx_path", nargs="?", help="Path to a single .xlsx export. Mutually exclusive with --dir.")
+    ap.add_argument("--dir", default=None,
+                     help="Process every .xlsx file directly under this directory instead of a single file. "
+                          "Mutually exclusive with xlsx_path. A failure on one file is logged and does not "
+                          "stop the rest of the batch.")
+    ap.add_argument("--tolerance", type=float, default=TOLERANCE_DEFAULT,
+                     help="Relative tolerance (default 0.5%%)")
+    ap.add_argument("--csv", default=None,
+                     help="Optional base path to write CSV reports. Two files are written: "
+                          "<name>-web<ext> (cached export values) and <name>-excel<ext> "
+                          "(values after a real Excel recalculation). Defaults to "
+                          f"{DEFAULT_CSV_DIR}/<date>/<company name>. Not usable with --dir "
+                          "(each file gets its own default path).")
+    ap.add_argument("--fail-only", action="store_true",
+                     help="When writing --csv, include only non-PASS rows (FAIL / REPORTED-MISSING)")
+    ap.add_argument("--web-only", action="store_true",
+                     help="Skip the Excel-recalculation pass (no Excel/pywin32 required)")
+    args = ap.parse_args()
+
+    if bool(args.xlsx_path) == bool(args.dir):
+        ap.error("provide exactly one of xlsx_path or --dir")
+    if args.dir and args.csv:
+        ap.error("--csv cannot be used with --dir; each file gets its own default CSV path")
+
+    date = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+
+    if args.xlsx_path:
+        csv_base = args.csv or default_csv_base(args.xlsx_path, date)
+        process_file(args.xlsx_path, args.tolerance, csv_base, args.fail_only, args.web_only)
+        return
+
+    xlsx_files = list(iter_xlsx_files(args.dir))
+    if not xlsx_files:
+        print(f"No .xlsx files found in {args.dir}")
+        return
+
+    succeeded, failed = [], []
+    for xlsx_path in xlsx_files:
+        print("\n" + "#" * 70)
+        print(f"# {xlsx_path}")
+        print("#" * 70)
+        try:
+            csv_base = default_csv_base(xlsx_path, date)
+            process_file(xlsx_path, args.tolerance, csv_base, args.fail_only, args.web_only)
+            succeeded.append(xlsx_path)
+        except Exception as e:
+            print(f"ERROR processing {xlsx_path}: {e}")
+            failed.append(xlsx_path)
+
+    print("\n" + "=" * 70)
+    print(f"Batch complete. {len(succeeded)} succeeded, {len(failed)} failed out of {len(xlsx_files)}.")
+    if failed:
+        print("Failed files:")
+        for f in failed:
+            print(f"  {f}")
 
 
 if __name__ == "__main__":

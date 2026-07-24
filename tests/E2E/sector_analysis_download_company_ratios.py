@@ -12,7 +12,7 @@ the downloads) for anything that went wrong.
 
 Usage
 -----
-    poetry run python tests/E2E/sector_analysis_download_company_ratios.py
+    poetry run poe download-ratios
 
 Edit COMPANIES below with the list to run. Each entry is used as the
 search term, and "Select all companies in <results>" is clicked - so make

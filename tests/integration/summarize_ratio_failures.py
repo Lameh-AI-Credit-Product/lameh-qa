@@ -93,6 +93,7 @@ def collect_failures(root):
                     "reported": r.get("Reported"),
                     "expected": r.get("Expected"),
                     "diff_pct": r.get("Diff %"),
+                    "excel_row": r.get("Excel Row"),
                 })
     return rows
 
@@ -133,14 +134,14 @@ def summary_table_rows(rows):
 
 def write_fail_details(path, rows, pass_):
     """Write every status == "FAIL" row for the given pass ("web"/"excel") to
-    `path` (Metric, Company, Period, Period Type, Reported, Expected, Diff %)."""
+    `path` (Metric, Company, Period, Period Type, Reported, Expected, Diff %, Excel Row)."""
     filtered = [r for r in rows if r["status"] == "FAIL" and r["pass"] == pass_]
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["Metric", "Company", "Period", "Period Type", "Reported", "Expected", "Diff %"])
+        w.writerow(["Metric", "Company", "Period", "Period Type", "Reported", "Expected", "Diff %", "Excel Row"])
         for row in filtered:
             w.writerow([row["metric"], row["company"], row["period"], row["period_type"],
-                        row["reported"], row["expected"], row["diff_pct"]])
+                        row["reported"], row["expected"], row["diff_pct"], row["excel_row"]])
 
 
 def print_table(rows):
@@ -205,11 +206,11 @@ def main():
         with open(args.csv, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["Metric", "Company", "Pass", "Period", "Period Type", "Status",
-                        "Reported", "Expected", "Diff %"])
+                        "Reported", "Expected", "Diff %", "Excel Row"])
             for row in rows:
                 w.writerow([row["metric"], row["company"], row["pass"], row["period"],
                             row["period_type"], row["status"], row["reported"],
-                            row["expected"], row["diff_pct"]])
+                            row["expected"], row["diff_pct"], row["excel_row"]])
         print(f"\nDetail CSV written to {args.csv}")
 
 

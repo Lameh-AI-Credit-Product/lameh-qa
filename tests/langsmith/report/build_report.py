@@ -1,0 +1,191 @@
+"""
+Lameh Intelligence - production-readiness report
+==================================================
+Reads a completed LangSmith experiment (produced by run_eval.py), aggregates
+evaluator pass rates per dimension (correctness / helpfulness / safety),
+sliced by sector and prompt type, applies configurable threshold gates
+(config.THRESHOLDS), and renders a markdown report. Every example links back
+to its LangSmith run (one-click trace debugging) and, when available, the
+orchestrator's own conversation_id (the agent-side thread).
+
+STATUS: safety.py doesn't exist yet, so the safety dimension is always
+reported as "not evaluated" here, not silently scored as passing - the
+overall readiness verdict can never be "ready" until it exists.
+
+Usage
+-----
+    poetry run python tests/langsmith/report/build_report.py --experiment materials-sector-3a94b70b
+"""
+
+import argparse
+import sys
+from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+from langsmith import Client
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import DATASET_NAME, THRESHOLDS  # noqa: E402
+
+DIMENSION_KEYS = ("correctness", "grounding", "completeness", "helpfulness_judge")
+
+
+def fetch_experiment_results(experiment_name, client=None):
+    """One row per dataset example evaluated in `experiment_name`: its
+    scores/comments per evaluator key, its sector/prompt_type (from the
+    dataset example's metadata), and links for debugging a failure."""
+    client = client or Client()
+    runs = list(client.list_runs(project_name=experiment_name, is_root=True))
+    feedback_by_run = defaultdict(list)
+    for fb in client.list_feedback(run_ids=[r.id for r in runs]):
+        feedback_by_run[fb.run_id].append(fb)
+    examples_by_id = {e.id: e for e in client.list_examples(dataset_name=DATASET_NAME)}
+
+    rows = []
+    for run in runs:
+        example = examples_by_id.get(run.reference_example_id)
+        metadata = (example.metadata if example else None) or {}
+        scores = {fb.key: fb.score for fb in feedback_by_run.get(run.id, [])}
+        comments = {fb.key: fb.comment for fb in feedback_by_run.get(run.id, [])}
+        outputs = run.outputs or {}
+        rows.append({
+            "example_id": metadata.get("id", str(run.reference_example_id)),
+            "sector": metadata.get("sector"),
+            "prompt_type": metadata.get("prompt_type"),
+            "scores": scores,
+            "comments": comments,
+            "conversation_id": outputs.get("conversation_id"),
+            "run_url": run.url,
+        })
+    return rows
+
+
+def _pass_rate(values):
+    graded = [v for v in values if v is not None]
+    return sum(graded) / len(graded) if graded else None
+
+
+def aggregate(rows):
+    """Pass rate per dimension, overall and sliced by sector/prompt_type.
+    A dimension with no graded values anywhere in the slice is None (not
+    0.0) - "no data" and "everything failed" must never look the same."""
+    overall = {key: _pass_rate([r["scores"].get(key) for r in rows]) for key in DIMENSION_KEYS}
+
+    def _sliced(group_key):
+        buckets = defaultdict(lambda: defaultdict(list))
+        for r in rows:
+            for key in DIMENSION_KEYS:
+                buckets[r[group_key]][key].append(r["scores"].get(key))
+        return {group: {key: _pass_rate(vals) for key, vals in dims.items()} for group, dims in buckets.items()}
+
+    return {"overall": overall, "by_sector": _sliced("sector"), "by_prompt_type": _sliced("prompt_type")}
+
+
+def _gate(value, threshold, comparison_ok):
+    if value is None:
+        return {"value": None, "threshold": threshold, "status": "undetermined"}
+    return {"value": value, "threshold": threshold, "status": "ready" if comparison_ok(value, threshold) else "not_ready"}
+
+
+def apply_thresholds(overall, thresholds=THRESHOLDS):
+    gates = {
+        "correctness": _gate(overall.get("correctness"), thresholds["correctness"], lambda v, t: v >= t),
+        "helpfulness": _gate(overall.get("helpfulness_judge"), thresholds["helpfulness"], lambda v, t: v >= t),
+        "safety": {"value": None, "threshold": thresholds["safety_violations_allowed"], "status": "not_evaluated"},
+    }
+    statuses = {gates["correctness"]["status"], gates["helpfulness"]["status"], gates["safety"]["status"]}
+    if "not_evaluated" in statuses:
+        overall_status = "not_ready (safety not evaluated - safety.py not built yet)"
+    elif statuses == {"ready"}:
+        overall_status = "ready"
+    elif "undetermined" in statuses:
+        overall_status = "undetermined (insufficient data)"
+    else:
+        overall_status = "not_ready"
+    gates["overall"] = overall_status
+    return gates
+
+
+def _fmt_pct(value):
+    return f"{value * 100:.1f}%" if value is not None else "n/a"
+
+
+def _fmt_gate_row(name, gate):
+    threshold_str = f"{gate['threshold'] * 100:.0f}%" if isinstance(gate["threshold"], float) else str(gate["threshold"])
+    return f"| {name} | {_fmt_pct(gate['value'])} | {threshold_str} | {gate['status']} |"
+
+
+def render_markdown(experiment_name, rows, aggregates, gates):
+    lines = []
+    lines.append(f"# Lameh Intelligence - Production Readiness Report")
+    lines.append(f"\nExperiment: `{experiment_name}`  ")
+    lines.append(f"Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}  ")
+    lines.append(f"Examples evaluated: {len(rows)}")
+
+    lines.append("\n## Overall Readiness Gates\n")
+    lines.append("| Dimension | Score | Threshold | Status |")
+    lines.append("|---|---|---|---|")
+    lines.append(_fmt_gate_row("Correctness", gates["correctness"]))
+    lines.append(_fmt_gate_row("Helpfulness", gates["helpfulness"]))
+    lines.append(f"| Safety | n/a | 0 violations allowed | {gates['safety']['status']} |")
+    lines.append(f"\n**Overall: {gates['overall']}**")
+
+    lines.append("\n## By Sector\n")
+    lines.append("| Sector | Correctness | Grounding | Completeness | Helpfulness |")
+    lines.append("|---|---|---|---|---|")
+    for sector, dims in sorted(aggregates["by_sector"].items(), key=lambda kv: str(kv[0])):
+        lines.append(
+            f"| {sector} | {_fmt_pct(dims.get('correctness'))} | {_fmt_pct(dims.get('grounding'))} | "
+            f"{_fmt_pct(dims.get('completeness'))} | {_fmt_pct(dims.get('helpfulness_judge'))} |"
+        )
+
+    lines.append("\n## By Prompt Type\n")
+    lines.append("| Prompt Type | Correctness | Grounding | Completeness | Helpfulness |")
+    lines.append("|---|---|---|---|---|")
+    for prompt_type, dims in sorted(aggregates["by_prompt_type"].items(), key=lambda kv: str(kv[0])):
+        lines.append(
+            f"| {prompt_type} | {_fmt_pct(dims.get('correctness'))} | {_fmt_pct(dims.get('grounding'))} | "
+            f"{_fmt_pct(dims.get('completeness'))} | {_fmt_pct(dims.get('helpfulness_judge'))} |"
+        )
+
+    lines.append("\n## Per-Example Detail\n")
+    for row in rows:
+        lines.append(f"### {row['example_id']}")
+        lines.append(f"- Sector: {row['sector']} | Prompt type: {row['prompt_type']}")
+        for key in DIMENSION_KEYS:
+            score = row["scores"].get(key)
+            comment = row["comments"].get(key)
+            marker = "PASS" if score == 1.0 else ("FAIL" if score == 0.0 else "n/a" if score is None else f"{score:.2f}")
+            lines.append(f"- **{key}**: {marker}" + (f" — {comment}" if comment else ""))
+        lines.append(f"- LangSmith trace: {row['run_url']}")
+        if row["conversation_id"]:
+            lines.append(f"- Orchestrator conversation_id (thread): `{row['conversation_id']}`")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def build_report(experiment_name, client=None):
+    rows = fetch_experiment_results(experiment_name, client=client)
+    aggregates = aggregate(rows)
+    gates = apply_thresholds(aggregates["overall"])
+    return render_markdown(experiment_name, rows, aggregates, gates)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Build the production-readiness report for a completed LangSmith experiment.")
+    ap.add_argument("--experiment", required=True, help="LangSmith experiment name, e.g. materials-sector-3a94b70b")
+    ap.add_argument("--out", default=None, help="Output markdown file path. Defaults to reports/<experiment>.md")
+    args = ap.parse_args()
+
+    report_md = build_report(args.experiment)
+
+    out_path = Path(args.out) if args.out else Path(__file__).resolve().parent.parent.parent.parent / "results" / "langsmith" / f"{args.experiment}.md"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(report_md, encoding="utf-8")
+    print(f"Report written to {out_path}")
+
+
+if __name__ == "__main__":
+    main()

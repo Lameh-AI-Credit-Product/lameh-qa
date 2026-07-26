@@ -1,0 +1,84 @@
+[
+  {
+    "id": "materials-q1-cash-quality",
+    "sector": "Materials",
+    "prompt_type": "multi-metric-comparison-with-qualitative-analysis",
+    "scope": "companies",
+    "companies": [
+      "شركة الجبس الأهلية",
+      "شركة التعدين العربية السعودية",
+      "شركة الصناعات الزجاجية الوطنية",
+      "شركة إتحاد مصانع الأسلاك"
+    ],
+    "fiscal_years": ["FY2023", "FY2024", "FY2025"],
+    "metrics_expected": [
+      "Days Sales Outstanding (DSO)",
+      "Return on Equity (ROE)",
+      "CapEx to Depreciation",
+      "Debt to CapEx"
+    ],
+    "requires_source_citation": true,
+    "qualitative_checks": [
+      "cash_quality_ni_vs_cfo",
+      "working_capital_red_flags",
+      "future_cash_generation_ranking"
+    ],
+    "input": "For the following companies: شركة الجبس الأهلية, شركة التعدين العربية السعودية,\nشركة الصناعات الزجاجية الوطنية, شركة إتحاد مصانع الأسلاك\n\nCalculate for FY2023, FY2024, and FY2025 (or latest 3 available fiscal years):\n- DSO (Days Sales Outstanding)\n- ROE (Return on Equity)\n- CapEx to Depreciation ratio\n- Debt to CapEx ratio\n\nFor each metric, cite the source financial statement and line item used.\n\nThen provide a qualitative comparison of cash quality across these companies:\n- Are earnings backed by real operating cash flow (compare net income to CFO)?\n- Any red flags in working capital trends (e.g., rising DSO, inventory buildup)?\n- Which companies look best-positioned for future cash generation, and why?"
+  },
+  {
+    "id": "materials-q2-cost-of-revenue-breakdown",
+    "sector": "Materials",
+    "prompt_type": "sector-wide-cost-breakdown",
+    "scope": "sector",
+    "companies": [],
+    "fiscal_years": ["latest available"],
+    "metrics_expected": ["Cost of Revenue Breakdown"],
+    "decomposition": true,
+    "requires_source_citation": true,
+    "qualitative_checks": [
+      "flags_undisclosed_breakdown"
+    ],
+    "input": "For all companies in the materials sector, break down Cost of Revenue into its\ncomponents (e.g., raw materials, direct labor, energy/fuel costs, depreciation\nof production equipment — whatever line items exist in their statements) for the\nmost recent fiscal year available.\n\nPresent as a comparison table, and cite the source statement/note for each figure.\nFlag any company where the cost of revenue breakdown isn't disclosed at that level\nof detail."
+  },
+  {
+    "id": "materials-q3-sector-ranking-table",
+    "sector": "Materials",
+    "prompt_type": "sector-wide-ranking-table",
+    "scope": "sector",
+    "companies": [],
+    "fiscal_years": ["latest available"],
+    "metrics_expected": [
+      "Market Cap",
+      "Revenue",
+      "Net Profit",
+      "Cash Flow from Operating Activities"
+    ],
+    "requires_source_citation": false,
+    "qualitative_checks": [
+      "flags_missing_metric_explicitly"
+    ],
+    "input": "Compare all materials sector companies on: Market Cap, Revenue, Net Profit, and\nCash Flow from Operating Activities, for the most recent fiscal year.\n\nPresent as a single sortable/rankable table. Note any company missing one of these\nmetrics rather than omitting it silently."
+  },
+  {
+    "id": "materials-q4-open-ended-overview",
+    "sector": "Materials",
+    "prompt_type": "open-ended-company-overview",
+    "scope": "companies",
+    "companies": [
+      "شركة مجموعة التيسير تالكو الصناعية",
+      "شركة المصانع الكبرى للتعدين",
+      "شركة أرامكو السعودية لزيوت الأساس",
+      "الشركة السعودية لصناعة الورق",
+      "شركة وطني للحديد والصلب"
+    ],
+    "fiscal_years": ["latest available"],
+    "metrics_expected": [],
+    "open_ended": true,
+    "metric_categories": ["operational", "market", "financial_health"],
+    "requires_source_citation": true,
+    "qualitative_checks": [
+      "metric_selection_reasoning"
+    ],
+    "input": "For Al Taiseer Group Talco Industrial Co. , Almasane Alkobra Mining Co. , Saudi Aramco Base Oil Co.  Saudi Paper Manufacturing Co. and Watani Iron Steel Co.  provide a comprehensive overview covering:\n- Operational metrics (e.g., revenue growth, margins, efficiency ratios)\n- Market metrics (e.g., P/E, market cap, EV/EBITDA if data available)\n- Financial health metrics (e.g., liquidity, leverage, profitability ratios)\n\nReason through which metrics are most relevant given this\ncompany's sector, and cite sources for all figures used."
+  }
+]

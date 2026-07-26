@@ -472,11 +472,14 @@ def formulas():
     # --- Profitability ---
     def ebitda(values, i):
         ebit = g(values, "EBIT (Operating Income)", i)
-        dep = g(values, "CFO - Depreciation Adjustment", i, default_zero_if_missing=True)
-        amort = g(values, "CFO - Amortization Adjustment", i, default_zero_if_missing=True)
         if ebit is None:
             return None, None
-        return ebit + dep + amort, None
+        dep = g(values, "CFO - Depreciation Adjustment", i, default_zero_if_missing=True)
+        amort = g(values, "CFO - Amortization Adjustment", i, default_zero_if_missing=True)
+        # Note the double space after "CFO -" - that's how it's actually
+        # spelled in the export.
+        dep_amort = g(values, "CFO -  Depreciation and Amortization Adjustment", i, default_zero_if_missing=True)
+        return ebit + dep + amort + dep_amort, None
     F["EBITDA"] = ebitda
 
     F["Gross Profit"] = lambda values, i: (

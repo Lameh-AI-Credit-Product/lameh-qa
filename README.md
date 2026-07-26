@@ -26,6 +26,12 @@ For the E2E script, Playwright also needs its browser binaries installed once:
 poetry run playwright install chromium
 ```
 
+The E2E script also reads `BASE_URL` from a `.env` file (gitignored, not committed). Copy `.env.example` to `.env` and adjust as needed:
+
+```
+cp .env.example .env
+```
+
 ## Usage
 
 Run the Sector Analysis ratio check against a single exported `.xlsx`:

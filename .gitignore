@@ -5,6 +5,9 @@ data/
 # Local test data exports (may contain client data)
 *.xlsx
 
+# Local environment config
+.env
+
 # Python
 __pycache__/
 *.py[cod]

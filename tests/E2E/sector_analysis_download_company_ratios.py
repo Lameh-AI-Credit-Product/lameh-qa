@@ -20,14 +20,18 @@ each entry specific enough to match exactly one company.
 """
 
 import logging
+import os
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
 from playwright.sync_api import Playwright, sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-BASE_URL = "https://frontend-dev-36462279645.me-central2.run.app"
+load_dotenv()
+
+BASE_URL = os.environ["BASE_URL"]
 LOGIN_URL = f"{BASE_URL}/login"
 
 # Edit this list with the companies to run in this batch. `name` is used as

@@ -39,9 +39,21 @@ AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY")
 AWS_REGION = os.environ.get("AWS_REGION")
 AWS_BEDROCK_MODEL_ID = os.environ.get("AWS_BEDROCK_MODEL_ID")
 
+# --- Evaluator keys, as they appear in the LangSmith dashboard and the
+# report. Named for what each one actually checks rather than for the
+# evaluation-jargon category it belongs to ("grounding", "helpfulness"),
+# so a dashboard column is readable without knowing the suite. Renaming one
+# starts a new metric in LangSmith - past experiments keep the old key. ---
+NUMERIC_ACCURACY = "numeric_accuracy"            # stated numbers vs live DB values
+NO_FABRICATED_COMPANIES = "no_fabricated_companies"  # every company named is real
+ANSWER_COVERAGE = "answer_coverage"              # covers every company/metric/year asked for
+ANSWER_QUALITY = "answer_quality"                # LLM judge: on-topic, usable, actually answers
+
+EVALUATOR_KEYS = (NUMERIC_ACCURACY, NO_FABRICATED_COMPANIES, ANSWER_COVERAGE, ANSWER_QUALITY)
+
 # --- Report thresholds (stage 5) - configurable, not hardcoded into logic ---
 THRESHOLDS = {
-    "correctness": 0.98,
-    "helpfulness": 0.90,
+    NUMERIC_ACCURACY: 0.98,
+    ANSWER_QUALITY: 0.90,
     "safety_violations_allowed": 0,
 }

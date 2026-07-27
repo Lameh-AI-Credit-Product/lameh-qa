@@ -27,9 +27,18 @@ from pathlib import Path
 from langsmith import Client
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import DATASET_NAME, THRESHOLDS  # noqa: E402
+from config import (ANSWER_COVERAGE, ANSWER_QUALITY, DATASET_NAME, EVALUATOR_KEYS,  # noqa: E402
+                     NO_FABRICATED_COMPANIES, NUMERIC_ACCURACY, THRESHOLDS)
 
-DIMENSION_KEYS = ("correctness", "grounding", "completeness", "helpfulness_judge")
+DIMENSION_KEYS = EVALUATOR_KEYS
+
+# Column headers for the breakdown tables - the evaluator keys, title-cased.
+DIMENSION_LABELS = {
+    NUMERIC_ACCURACY: "Numeric Accuracy",
+    NO_FABRICATED_COMPANIES: "No Fabricated Companies",
+    ANSWER_COVERAGE: "Answer Coverage",
+    ANSWER_QUALITY: "Answer Quality",
+}
 
 
 def fetch_experiment_results(experiment_name, client=None):
@@ -91,11 +100,11 @@ def _gate(value, threshold, comparison_ok):
 
 def apply_thresholds(overall, thresholds=THRESHOLDS):
     gates = {
-        "correctness": _gate(overall.get("correctness"), thresholds["correctness"], lambda v, t: v >= t),
-        "helpfulness": _gate(overall.get("helpfulness_judge"), thresholds["helpfulness"], lambda v, t: v >= t),
+        NUMERIC_ACCURACY: _gate(overall.get(NUMERIC_ACCURACY), thresholds[NUMERIC_ACCURACY], lambda v, t: v >= t),
+        ANSWER_QUALITY: _gate(overall.get(ANSWER_QUALITY), thresholds[ANSWER_QUALITY], lambda v, t: v >= t),
         "safety": {"value": None, "threshold": thresholds["safety_violations_allowed"], "status": "not_evaluated"},
     }
-    statuses = {gates["correctness"]["status"], gates["helpfulness"]["status"], gates["safety"]["status"]}
+    statuses = {gates[NUMERIC_ACCURACY]["status"], gates[ANSWER_QUALITY]["status"], gates["safety"]["status"]}
     if "not_evaluated" in statuses:
         overall_status = "not_ready (safety not evaluated - safety.py not built yet)"
     elif statuses == {"ready"}:
@@ -127,28 +136,24 @@ def render_markdown(experiment_name, rows, aggregates, gates):
     lines.append("\n## Overall Readiness Gates\n")
     lines.append("| Dimension | Score | Threshold | Status |")
     lines.append("|---|---|---|---|")
-    lines.append(_fmt_gate_row("Correctness", gates["correctness"]))
-    lines.append(_fmt_gate_row("Helpfulness", gates["helpfulness"]))
+    lines.append(_fmt_gate_row(DIMENSION_LABELS[NUMERIC_ACCURACY], gates[NUMERIC_ACCURACY]))
+    lines.append(_fmt_gate_row(DIMENSION_LABELS[ANSWER_QUALITY], gates[ANSWER_QUALITY]))
     lines.append(f"| Safety | n/a | 0 violations allowed | {gates['safety']['status']} |")
     lines.append(f"\n**Overall: {gates['overall']}**")
 
-    lines.append("\n## By Sector\n")
-    lines.append("| Sector | Correctness | Grounding | Completeness | Helpfulness |")
-    lines.append("|---|---|---|---|---|")
-    for sector, dims in sorted(aggregates["by_sector"].items(), key=lambda kv: str(kv[0])):
-        lines.append(
-            f"| {sector} | {_fmt_pct(dims.get('correctness'))} | {_fmt_pct(dims.get('grounding'))} | "
-            f"{_fmt_pct(dims.get('completeness'))} | {_fmt_pct(dims.get('helpfulness_judge'))} |"
-        )
+    header = " | ".join(DIMENSION_LABELS[k] for k in DIMENSION_KEYS)
+    divider = "|---" * (len(DIMENSION_KEYS) + 1) + "|"
 
-    lines.append("\n## By Prompt Type\n")
-    lines.append("| Prompt Type | Correctness | Grounding | Completeness | Helpfulness |")
-    lines.append("|---|---|---|---|---|")
-    for prompt_type, dims in sorted(aggregates["by_prompt_type"].items(), key=lambda kv: str(kv[0])):
-        lines.append(
-            f"| {prompt_type} | {_fmt_pct(dims.get('correctness'))} | {_fmt_pct(dims.get('grounding'))} | "
-            f"{_fmt_pct(dims.get('completeness'))} | {_fmt_pct(dims.get('helpfulness_judge'))} |"
-        )
+    for title, group_label, grouped in (
+        ("By Sector", "Sector", aggregates["by_sector"]),
+        ("By Prompt Type", "Prompt Type", aggregates["by_prompt_type"]),
+    ):
+        lines.append(f"\n## {title}\n")
+        lines.append(f"| {group_label} | {header} |")
+        lines.append(divider)
+        for group, dims in sorted(grouped.items(), key=lambda kv: str(kv[0])):
+            cells = " | ".join(_fmt_pct(dims.get(k)) for k in DIMENSION_KEYS)
+            lines.append(f"| {group} | {cells} |")
 
     lines.append("\n## Per-Example Detail\n")
     for row in rows:
@@ -158,7 +163,7 @@ def render_markdown(experiment_name, rows, aggregates, gates):
             score = row["scores"].get(key)
             comment = row["comments"].get(key)
             marker = "PASS" if score == 1.0 else ("FAIL" if score == 0.0 else "n/a" if score is None else f"{score:.2f}")
-            lines.append(f"- **{key}**: {marker}" + (f" — {comment}" if comment else ""))
+            lines.append(f"- **{DIMENSION_LABELS[key]}**: {marker}" + (f" — {comment}" if comment else ""))
         lines.append(f"- LangSmith trace: {row['run_url']}")
         if row["conversation_id"]:
             lines.append(f"- Orchestrator conversation_id (thread): `{row['conversation_id']}`")

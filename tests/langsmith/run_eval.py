@@ -38,9 +38,10 @@ from langsmith.evaluation import evaluate
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "evaluators"))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "report"))
-from agent_client import ask_agent  # noqa: E402
+from agent_client import DEFAULT_DEADLINE_SECONDS, ask_agent  # noqa: E402
 from build_report import write_report  # noqa: E402
-from config import DATASET_NAME, LANGSMITH_PROJECT  # noqa: E402
+from config import (ANSWER_COVERAGE, ANSWER_QUALITY, DATASET_NAME, LANGSMITH_PROJECT,  # noqa: E402
+                     NO_FABRICATED_COMPANIES, NUMERIC_ACCURACY)
 from correctness import grounding_check, numeric_comparison  # noqa: E402
 from extraction import extract_all  # noqa: E402
 from ground_truth import GroundTruthClient, list_sector_companies  # noqa: E402
@@ -59,34 +60,70 @@ REPORT_RETRY_DELAY_SECONDS = 10
 # orchestrator starts rate-limiting or the parallel load skews response times.
 DEFAULT_MAX_CONCURRENCY = 4
 
+# Wall-clock budget per prompt, overridable with --agent-timeout. Module-level
+# because LangSmith calls target() itself and gives us nowhere to pass it.
+_agent_deadline_seconds = DEFAULT_DEADLINE_SECONDS
+
 
 def _single_company_or_none(metadata):
     companies = metadata.get("companies") or []
     return companies[0] if len(companies) == 1 else None
 
 
+# answer_coverage and answer_quality are separate evaluators but need the same
+# judge verdict, so the first to run pays for the call and the second reads the
+# cache - one Bedrock request per example, not two. Keyed by run id; safe under
+# LangSmith's evaluator threads, where a race costs one redundant call at worst.
+_judge_verdicts = {}
+
+
+def _judge_verdict(run, example):
+    if run.id not in _judge_verdicts:
+        _judge_verdicts[run.id] = relevance_usability_judge(
+            example.inputs["prompt"],
+            run.outputs["answer"],
+            expected_metrics=(example.metadata or {}).get("metrics_expected") or [],
+        )
+    return _judge_verdicts[run.id]
+
+
 def target(inputs):
-    """The system under test: the Intelligence agent itself."""
-    result = ask_agent(inputs["prompt"])
-    return {"answer": result["answer"], "conversation_id": result["conversation_id"], "completed": result["completed"]}
+    """The system under test: the Intelligence agent itself.
+
+    `timed_out`/`elapsed_seconds` ride along in the outputs so a prompt that
+    blew the deadline is visible in the dashboard as its own thing, not just
+    as a mysteriously short answer."""
+    result = ask_agent(inputs["prompt"], deadline_seconds=_agent_deadline_seconds)
+    if result["timed_out"]:
+        print(f"  TIMED OUT after {result['elapsed_seconds']}s "
+              f"({len(result['answer'])} chars received): {inputs['prompt'][:60]!r}")
+    return {
+        "answer": result["answer"],
+        "conversation_id": result["conversation_id"],
+        "completed": result["completed"],
+        "timed_out": result["timed_out"],
+        "elapsed_seconds": result["elapsed_seconds"],
+    }
 
 
-def correctness_evaluator(run, example):
+def numeric_accuracy_evaluator(run, example):
+    """Are the numbers the agent states actually right, vs live DB values?"""
     metadata = example.metadata or {}
     facts = extract_all(run.outputs["answer"], default_company=_single_company_or_none(metadata))
     comparisons = numeric_comparison(facts, _ground_truth_client)
     graded = [c for c in comparisons if not c["skipped"]]
     if not graded:
-        return {"key": "correctness", "score": None, "comment": "no comparable facts extracted"}
+        return {"key": NUMERIC_ACCURACY, "score": None, "comment": "no comparable facts extracted"}
     passed = sum(1 for c in graded if c["within_tolerance"])
     return {
-        "key": "correctness",
+        "key": NUMERIC_ACCURACY,
         "score": passed / len(graded),
         "comment": json.dumps({"passed": passed, "total": len(graded)}, ensure_ascii=False),
     }
 
 
-def grounding_evaluator(run, example):
+def no_fabricated_companies_evaluator(run, example):
+    """Does every company the agent names actually exist in the sector?"""
     metadata = example.metadata or {}
     facts = extract_all(run.outputs["answer"], default_company=_single_company_or_none(metadata))
     sector = metadata.get("sector")
@@ -94,36 +131,68 @@ def grounding_evaluator(run, example):
         valid_companies = list_sector_companies(sector) if sector else []
     except KeyError:
         valid_companies = []
-    flagged = grounding_check(facts, valid_companies) if valid_companies else []
+    if not valid_companies:
+        return {"key": NO_FABRICATED_COMPANIES, "score": None,
+                "comment": f"no company roster for sector {sector!r} - nothing to validate against"}
+    named_companies = {f["company"] for f in facts if f.get("company")}
+    if not named_companies:
+        return {"key": NO_FABRICATED_COMPANIES, "score": None,
+                "comment": "the response names no companies - nothing to validate"}
+    flagged = grounding_check(facts, valid_companies)
     return {
-        "key": "grounding",
+        "key": NO_FABRICATED_COMPANIES,
         "score": 0.0 if flagged else 1.0,
-        "comment": json.dumps(flagged, ensure_ascii=False) if flagged else "no fabricated companies detected",
+        "comment": json.dumps(flagged, ensure_ascii=False) if flagged
+                   else f"all {len(named_companies)} companies named are real",
     }
 
 
-def completeness_evaluator(run, example):
+def answer_coverage_evaluator(run, example):
+    """Does the answer cover every company/metric/fiscal year asked for?"""
     metadata = example.metadata or {}
-    facts = extract_all(run.outputs["answer"], default_company=_single_company_or_none(metadata))
+    answer = run.outputs["answer"]
+    facts = extract_all(answer, default_company=_single_company_or_none(metadata))
+    expected_metrics = metadata.get("metrics_expected") or []
+
+    # Metric presence comes from the judge, which reads meaning rather than
+    # strings - the agent renames metrics freely and also names ones it never
+    # supplied. Falls back to structural matching if the judge misbehaves.
+    metrics_present = None
+    if expected_metrics:
+        verdict = _judge_verdict(run, example)
+        if not verdict.get("judge_error"):
+            metrics_present = verdict.get("metrics_present") or {}
+
     result = completeness_check(
         facts,
         expected_companies=metadata.get("companies") or [],
-        expected_metrics=metadata.get("metrics_expected") or [],
+        expected_metrics=expected_metrics,
         expected_fiscal_years=metadata.get("fiscal_years") or [],
-        stream_completed=run.outputs.get("completed", True),
+        stream_completed=run.outputs.get("completed", True) and not run.outputs.get("timed_out"),
+        response_text=answer,
+        metrics_present=metrics_present,
     )
-    if result["score"] is None:
-        return {"key": "completeness", "score": None,
+    result["metric_source"] = "judge" if metrics_present is not None else "structural-fallback"
+    if run.outputs.get("timed_out"):
+        # A deadline kill is a genuine coverage failure - the answer really is
+        # cut off - but it stays scoped to coverage. The other evaluators still
+        # grade whatever text did arrive, so a slow prompt doesn't wipe out
+        # every dimension at once.
+        result["score"] = 0.0
+        result["timed_out_after_seconds"] = run.outputs.get("elapsed_seconds")
+    elif result["score"] is None:
+        return {"key": ANSWER_COVERAGE, "score": None,
                 "comment": "not applicable - the dataset row expects no specific companies/metrics/years"}
-    return {"key": "completeness", "score": result["score"], "comment": json.dumps(result, ensure_ascii=False)}
+    return {"key": ANSWER_COVERAGE, "score": result["score"], "comment": json.dumps(result, ensure_ascii=False)}
 
 
-def helpfulness_judge_evaluator(run, example):
-    verdict = relevance_usability_judge(example.inputs["prompt"], run.outputs["answer"])
+def answer_quality_evaluator(run, example):
+    """LLM judge: on topic, well formatted, and actually answers the question."""
+    verdict = _judge_verdict(run, example)
     if verdict.get("judge_error"):
-        return {"key": "helpfulness_judge", "score": None, "comment": "judge did not return valid JSON"}
+        return {"key": ANSWER_QUALITY, "score": None, "comment": "judge did not return valid JSON"}
     score = 1.0 if (verdict["on_topic"] and verdict["well_formatted"] and verdict["answers_question"]) else 0.0
-    return {"key": "helpfulness_judge", "score": score, "comment": verdict.get("reasoning")}
+    return {"key": ANSWER_QUALITY, "score": score, "comment": verdict.get("reasoning")}
 
 
 def _select_examples(example_id):
@@ -151,17 +220,26 @@ def main():
                           f"(default {DEFAULT_MAX_CONCURRENCY}). Each prompt takes ~7-10 min, so running "
                           f"them in parallel is roughly the difference between one prompt's "
                           f"wall time and the whole dataset's. Use 1 to serialize.")
+    ap.add_argument("--agent-timeout", type=int, default=DEFAULT_DEADLINE_SECONDS, metavar="SECONDS",
+                     help=f"Wall-clock budget per prompt (default {DEFAULT_DEADLINE_SECONDS}s = "
+                          f"{DEFAULT_DEADLINE_SECONDS // 60} min). A prompt still running past this is "
+                          f"cut off and scored on whatever text arrived, with answer_coverage failed as "
+                          f"truncated. Pass 0 to wait indefinitely.")
     ap.add_argument("--report-out", default=None,
                      help="Where to write the markdown report. Defaults to results/langsmith/<experiment>.md")
     ap.add_argument("--skip-report", action="store_true",
                      help="Only run the experiment; don't build the markdown report afterwards.")
     args = ap.parse_args()
 
+    global _agent_deadline_seconds
+    _agent_deadline_seconds = args.agent_timeout or None
+
     examples = _select_examples(args.example_id)
     results = evaluate(
         target,
         data=examples,
-        evaluators=[correctness_evaluator, grounding_evaluator, completeness_evaluator, helpfulness_judge_evaluator],
+        evaluators=[numeric_accuracy_evaluator, no_fabricated_companies_evaluator,
+                    answer_coverage_evaluator, answer_quality_evaluator],
         experiment_prefix="materials-sector",
         metadata={"suite": "lameh-intelligence-eval"},
         max_concurrency=args.max_concurrency,

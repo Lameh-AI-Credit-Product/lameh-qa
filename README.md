@@ -71,7 +71,17 @@ Push the prompt set (`tests/langsmith/dataset/prompt_set.json`) to the LangSmith
 poetry run poe langsmith-build-dataset
 ```
 
-Run the eval — calls the live agent for every dataset example (or just one via `--example-id`) and scores each response with the correctness/grounding/completeness/helpfulness evaluators, uploading results to LangSmith:
+Run the eval — calls the live agent for every dataset example (or just one via `--example-id`), scores each response, and uploads the results to LangSmith:
+
+| Evaluator | What it checks |
+|---|---|
+| `numeric_accuracy` | Every number the agent states, against the live database within 1% tolerance |
+| `no_fabricated_companies` | Every company the agent names actually exists in the sector |
+| `answer_coverage` | The answer covers every company, metric and fiscal year the prompt asked for |
+| `answer_quality` | LLM judge: on topic, well formatted, and actually answers the question |
+
+A blank score means "not applicable to this example" (no numbers to compare, no companies named, nothing specific expected) — distinct from a failing `0`.
+
 
 ```
 poetry run poe langsmith-run [--example-id materials-q1-cash-quality] [--max-concurrency 4] [--report-out path/to/report.md] [--skip-report]

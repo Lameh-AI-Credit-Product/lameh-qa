@@ -17,6 +17,10 @@ to extraction when the example's metadata lists exactly one company;
 otherwise calc facts get company=None and are skipped by numeric_comparison
 (they simply won't show up in the correctness score for those examples yet).
 
+Once the experiment finishes, the markdown production-readiness report is
+built automatically from it (results/langsmith/<experiment>.md) - pass
+--skip-report to only run the experiment.
+
 Usage
 -----
     poetry run python tests/langsmith/run_eval.py
@@ -25,6 +29,7 @@ Usage
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from langsmith import Client
@@ -32,7 +37,9 @@ from langsmith.evaluation import evaluate
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "evaluators"))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "report"))
 from agent_client import ask_agent  # noqa: E402
+from build_report import write_report  # noqa: E402
 from config import DATASET_NAME, LANGSMITH_PROJECT  # noqa: E402
 from correctness import grounding_check, numeric_comparison  # noqa: E402
 from extraction import extract_all  # noqa: E402
@@ -42,6 +49,15 @@ from helpfulness import completeness_check, relevance_usability_judge  # noqa: E
 # One shared client per run, so repeated (company, metric, fiscal_year)
 # lookups across examples are cached rather than re-fetched.
 _ground_truth_client = GroundTruthClient()
+
+REPORT_FETCH_ATTEMPTS = 3
+REPORT_RETRY_DELAY_SECONDS = 10
+
+# Each prompt is a 7-10 minute agent call that's almost entirely network wait,
+# so examples are run in parallel by default - the dataset is 4 rows, hence 4.
+# Raise via --max-concurrency if the dataset grows; lower it to 1 if the
+# orchestrator starts rate-limiting or the parallel load skews response times.
+DEFAULT_MAX_CONCURRENCY = 4
 
 
 def _single_company_or_none(metadata):
@@ -96,7 +112,10 @@ def completeness_evaluator(run, example):
         expected_fiscal_years=metadata.get("fiscal_years") or [],
         stream_completed=run.outputs.get("completed", True),
     )
-    return {"key": "completeness", "score": 1.0 if result["complete"] else 0.0, "comment": json.dumps(result, ensure_ascii=False)}
+    if result["score"] is None:
+        return {"key": "completeness", "score": None,
+                "comment": "not applicable - the dataset row expects no specific companies/metrics/years"}
+    return {"key": "completeness", "score": result["score"], "comment": json.dumps(result, ensure_ascii=False)}
 
 
 def helpfulness_judge_evaluator(run, example):
@@ -127,17 +146,55 @@ def main():
     ap.add_argument("--example-id", default=None,
                      help="Only run the single dataset example with this prompt_set.json id "
                           "(e.g. materials-q1-cash-quality). Omit to run the whole dataset.")
+    ap.add_argument("--max-concurrency", type=int, default=DEFAULT_MAX_CONCURRENCY,
+                     help=f"How many dataset examples to run against the agent at once "
+                          f"(default {DEFAULT_MAX_CONCURRENCY}). Each prompt takes ~7-10 min, so running "
+                          f"them in parallel is roughly the difference between one prompt's "
+                          f"wall time and the whole dataset's. Use 1 to serialize.")
+    ap.add_argument("--report-out", default=None,
+                     help="Where to write the markdown report. Defaults to results/langsmith/<experiment>.md")
+    ap.add_argument("--skip-report", action="store_true",
+                     help="Only run the experiment; don't build the markdown report afterwards.")
     args = ap.parse_args()
 
-    evaluate(
+    examples = _select_examples(args.example_id)
+    results = evaluate(
         target,
-        data=_select_examples(args.example_id),
+        data=examples,
         evaluators=[correctness_evaluator, grounding_evaluator, completeness_evaluator, helpfulness_judge_evaluator],
         experiment_prefix="materials-sector",
         metadata={"suite": "lameh-intelligence-eval"},
-        max_concurrency=1,
+        max_concurrency=args.max_concurrency,
     )
     print(f"Done - check the '{LANGSMITH_PROJECT}' project in the LangSmith dashboard.")
+
+    if args.skip_report:
+        print(f"Report skipped. Build it later with: poetry run poe langsmith-report --experiment {results.experiment_name}")
+        return
+
+    _build_report_for(results.experiment_name, args.report_out, expected_example_count=len(examples))
+
+
+def _build_report_for(experiment_name, report_out, expected_example_count):
+    """One report per run, covering every example in it. Feedback is uploaded
+    asynchronously and lands per-example - the slowest prompts can trail the
+    fastest by minutes - so write_report waits until all `expected_example_count`
+    examples have all their scores rather than rendering whichever finished
+    first. A report failure must never lose the run itself, hence the catch."""
+    print(f"Building report for {experiment_name} ({expected_example_count} examples) ...")
+    try:
+        out_path = write_report(
+            experiment_name,
+            out=report_out,
+            expected_example_count=expected_example_count,
+            wait_attempts=REPORT_FETCH_ATTEMPTS,
+            wait_delay_seconds=REPORT_RETRY_DELAY_SECONDS,
+        )
+        print(f"Report written to {out_path}")
+    except Exception as exc:  # noqa: BLE001 - the experiment itself already succeeded
+        print(f"Report generation failed ({exc}).")
+        print(f"The experiment itself is fine - retry with: "
+              f"poetry run poe langsmith-report --experiment {experiment_name}")
 
 
 if __name__ == "__main__":

@@ -112,7 +112,12 @@ class GroundTruthClient:
     (company, metric, fiscal_year) lookups across dataset examples in a
     single eval run don't hit the API redundantly. A fresh instance should be
     created per eval run (see run_eval.py), not shared/reused across runs -
-    it deliberately does not expire entries."""
+    it deliberately does not expire entries.
+
+    Safe to share across the threads LangSmith uses when examples run
+    concurrently: the worst case is two threads racing to populate the same
+    key, which costs one redundant (idempotent) fetch and never corrupts the
+    cache. Not worth a lock, which would serialize every lookup."""
 
     def __init__(self, fetch_fn=_fetch_live):
         self._fetch_fn = fetch_fn

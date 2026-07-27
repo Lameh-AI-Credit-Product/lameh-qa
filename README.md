@@ -74,10 +74,14 @@ poetry run poe langsmith-build-dataset
 Run the eval — calls the live agent for every dataset example (or just one via `--example-id`) and scores each response with the correctness/grounding/completeness/helpfulness evaluators, uploading results to LangSmith:
 
 ```
-poetry run poe langsmith-run [--example-id materials-q1-cash-quality]
+poetry run poe langsmith-run [--example-id materials-q1-cash-quality] [--max-concurrency 4] [--report-out path/to/report.md] [--skip-report]
 ```
 
-This prints an experiment name (e.g. `materials-sector-3a94b70b`) and a LangSmith dashboard URL. Then build the markdown production-readiness report from that experiment:
+Examples run in parallel (4 at a time by default) since each prompt is a ~7–10 minute agent call — the whole dataset takes about as long as its slowest single prompt. Pass `--max-concurrency 1` to serialize.
+
+This prints an experiment name (e.g. `materials-sector-3a94b70b`) and a LangSmith dashboard URL, then automatically builds the markdown production-readiness report for that experiment once it finishes. Pass `--skip-report` to only run the experiment.
+
+To (re)build the report for an experiment on its own — e.g. an older run, or one where report generation failed:
 
 ```
 poetry run poe langsmith-report --experiment materials-sector-3a94b70b [--out path/to/report.md]

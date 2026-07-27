@@ -36,7 +36,10 @@ def completeness_check(facts, expected_companies=None, expected_metrics=None,
 
     `stream_completed` should come from agent_client.ask_agent()'s result -
     False means the SSE stream ended without a message_complete event, i.e.
-    a truncated response, which overrides everything else as incomplete."""
+    a truncated response, which overrides everything else as incomplete.
+
+    "score" is a fraction of expected items actually covered, or None when
+    nothing was expected at all - an unscored row, never a zero."""
     mentioned_companies = {f["company"] for f in facts if f.get("company")}
     mentioned_metrics = {f["metric"] for f in facts if f.get("metric")}
     mentioned_table_titles = {f["table_title"].lower() for f in facts if f.get("table_title")}
@@ -53,12 +56,29 @@ def completeness_check(facts, expected_companies=None, expected_metrics=None,
     normalized_expected_years = {y.replace("FY", "").strip() for y in (expected_fiscal_years or []) if "FY" in y.upper()}
     missing_fiscal_years = sorted(normalized_expected_years - mentioned_fiscal_years)
 
+    expected_item_count = len(expected_companies or []) + len(expected_metrics or []) + len(normalized_expected_years)
+    missing_item_count = len(missing_companies) + len(missing_metrics) + len(missing_fiscal_years)
+    if not stream_completed:
+        # A cut-off response is a real failure regardless of what was
+        # covered before it got cut off - don't let partial credit mask that.
+        score = 0.0
+    elif expected_item_count == 0:
+        # Nothing was expected, so there's nothing to score. None (not 0.0,
+        # not 1.0) so "not applicable" stays visibly distinct from "covered
+        # nothing it should have" in the dashboard and in the report's
+        # aggregates.
+        score = None
+    else:
+        score = (expected_item_count - missing_item_count) / expected_item_count
+
     return {
         "missing_companies": missing_companies,
         "missing_metrics": missing_metrics,
         "missing_fiscal_years": missing_fiscal_years,
         "truncated": not stream_completed,
         "complete": not (missing_companies or missing_metrics or missing_fiscal_years) and stream_completed,
+        "expected_item_count": expected_item_count,
+        "score": score,
     }
 
 

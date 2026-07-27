@@ -19,6 +19,7 @@ Usage
 
 import argparse
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -173,18 +174,60 @@ def build_report(experiment_name, client=None):
     return render_markdown(experiment_name, rows, aggregates, gates)
 
 
+def default_out_path(experiment_name):
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    return repo_root / "results" / "langsmith" / f"{experiment_name}.md"
+
+
+def missing_feedback(rows, expected_example_count=None):
+    """Which examples don't yet have all four evaluator scores recorded.
+
+    Feedback is uploaded asynchronously and lands per-example, so an
+    experiment queried too early looks like a *smaller* run rather than an
+    unfinished one - the slowest examples are simply absent. The report must
+    cover the whole run, so callers wait on this instead of silently
+    rendering a partial one."""
+    pending = [r["example_id"] for r in rows if not set(DIMENSION_KEYS) <= set(r["scores"])]
+    if expected_example_count is not None and len(rows) < expected_example_count:
+        pending.append(f"<{expected_example_count - len(rows)} example(s) not yet reported>")
+    return pending
+
+
+def write_report(experiment_name, out=None, client=None, expected_example_count=None,
+                  wait_attempts=1, wait_delay_seconds=10):
+    """Builds the report and writes it to disk, returning the output path.
+    Shared by this script's CLI and by run_eval.py, which calls it directly
+    once an experiment finishes so a run always leaves a report behind.
+
+    With wait_attempts > 1, re-queries until every example in the run has all
+    its evaluator scores, so the report always covers the whole run rather
+    than whichever examples happened to finish uploading first."""
+    client = client or Client()
+    for attempt in range(wait_attempts):
+        rows = fetch_experiment_results(experiment_name, client=client)
+        pending = missing_feedback(rows, expected_example_count)
+        if not pending or attempt == wait_attempts - 1:
+            if pending:
+                print(f"Warning: still waiting on scores for {pending} - reporting what's available.")
+            break
+        print(f"Waiting for evaluator scores on {pending} ...")
+        time.sleep(wait_delay_seconds)
+
+    aggregates = aggregate(rows)
+    report_md = render_markdown(experiment_name, rows, aggregates, apply_thresholds(aggregates["overall"]))
+    out_path = Path(out) if out else default_out_path(experiment_name)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(report_md, encoding="utf-8")
+    return out_path
+
+
 def main():
     ap = argparse.ArgumentParser(description="Build the production-readiness report for a completed LangSmith experiment.")
     ap.add_argument("--experiment", required=True, help="LangSmith experiment name, e.g. materials-sector-3a94b70b")
     ap.add_argument("--out", default=None, help="Output markdown file path. Defaults to reports/<experiment>.md")
     args = ap.parse_args()
 
-    report_md = build_report(args.experiment)
-
-    out_path = Path(args.out) if args.out else Path(__file__).resolve().parent.parent.parent.parent / "results" / "langsmith" / f"{args.experiment}.md"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(report_md, encoding="utf-8")
-    print(f"Report written to {out_path}")
+    print(f"Report written to {write_report(args.experiment, out=args.out)}")
 
 
 if __name__ == "__main__":

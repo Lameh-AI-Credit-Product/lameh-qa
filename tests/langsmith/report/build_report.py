@@ -138,6 +138,19 @@ def _fmt_gate_row(name, gate):
     return f"| {name} | {_fmt_pct(gate['value'])} | {threshold_str} | {gate['status']} |"
 
 
+def _detail_lines(label, marker, comment):
+    """One evaluator's line in the per-example section.
+
+    Comments are formatted by comment_format.py as a headline plus "- "
+    detail lines (see that module for why they aren't JSON). The headline
+    goes inline after the score; the rest are indented two spaces so they
+    render as nested bullets rather than collapsing into one paragraph."""
+    if not comment:
+        return [f"- **{label}**: {marker}"]
+    headline, *details = comment.splitlines()
+    return [f"- **{label}**: {marker} — {headline}"] + [f"  {line}" for line in details]
+
+
 def render_markdown(experiment_name, rows, aggregates, gates):
     lines = []
     lines.append(f"# Lameh Intelligence - Production Readiness Report")
@@ -174,7 +187,7 @@ def render_markdown(experiment_name, rows, aggregates, gates):
             score = row["scores"].get(key)
             comment = row["comments"].get(key)
             marker = "PASS" if score == 1.0 else ("FAIL" if score == 0.0 else "n/a" if score is None else f"{score:.2f}")
-            lines.append(f"- **{DIMENSION_LABELS[key]}**: {marker}" + (f" — {comment}" if comment else ""))
+            lines.extend(_detail_lines(DIMENSION_LABELS[key], marker, comment))
         lines.append(f"- LangSmith trace: {row['run_url']}")
         if row["conversation_id"]:
             lines.append(f"- Orchestrator conversation_id (thread): `{row['conversation_id']}`")

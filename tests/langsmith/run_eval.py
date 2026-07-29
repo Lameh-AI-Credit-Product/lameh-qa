@@ -46,7 +46,6 @@ Usage
 """
 
 import argparse
-import json
 import sys
 import time
 from pathlib import Path
@@ -57,6 +56,7 @@ from langsmith.evaluation import evaluate
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "evaluators"))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "report"))
+import comment_format as fmt  # noqa: E402
 from agent_client import DEFAULT_DEADLINE_SECONDS, ask_agent  # noqa: E402
 from build_report import write_report  # noqa: E402
 from config import (ALL_VALUES_TAGGED, ANSWER_COVERAGE, ANSWER_QUALITY, COMPANY_COVERAGE,  # noqa: E402
@@ -94,20 +94,6 @@ def _single_company_or_none(metadata):
     return companies[0] if len(companies) == 1 else None
 
 
-# Long comments are truncated in the LangSmith UI, and a 60-tag response can
-# produce a defect list longer than the answer itself. Every comment leads
-# with its counts and aggregates so the useful part survives; the per-item
-# lists are capped and marked as truncated. Full detail is always
-# reconstructible from the run's own output text.
-MAX_COMMENT_ITEMS = 15
-
-
-def _capped(items, limit=MAX_COMMENT_ITEMS):
-    if len(items) <= limit:
-        return items
-    return items[:limit] + [{"truncated": f"...and {len(items) - limit} more"}]
-
-
 # Six of the eight evaluators need the same parsed facts, and LangSmith calls
 # each evaluator separately - so parsing is cached per run rather than redone
 # eight times over a 40 KB answer. Same pattern as the judge cache below;
@@ -139,18 +125,6 @@ def _judge(run, dimension, judge_fn, *args):
     if key not in _judge_verdicts:
         _judge_verdicts[key] = judge_fn(*args)
     return _judge_verdicts[key]
-
-
-def _judge_error_comment(verdict):
-    """Says *how* the judge failed. "Truncated" means the reply was cut off
-    mid-JSON - a token-ceiling problem with a specific fix - while anything
-    else means it answered with something that wasn't JSON. Reporting both as
-    "invalid JSON" sent the first full run's investigation down the wrong
-    path once already."""
-    if verdict.get("truncated"):
-        return ("judge reply was cut off mid-JSON - raise judge_client.DEFAULT_MAX_TOKENS "
-                "or lower llm_judge.MAX_FINDINGS")
-    return f"judge did not return valid JSON: {str(verdict.get('raw_response'))[:200]!r}"
 
 
 def _expected_companies(metadata):
@@ -207,8 +181,7 @@ def numeric_accuracy_evaluator(run, example):
     graded = [c for c in comparisons if not c["skipped"]]
     if not graded:
         return {"key": NUMERIC_ACCURACY, "score": None,
-                "comment": f"no comparable facts extracted ({len(comparisons)} found, all unresolvable "
-                           f"against ground truth)"}
+                "comment": fmt.numeric_accuracy_unresolvable(len(comparisons))}
     failures = [c for c in graded if not c["within_tolerance"]]
     by_kind = {}
     for comparison in graded:
@@ -218,15 +191,7 @@ def numeric_accuracy_evaluator(run, example):
     return {
         "key": NUMERIC_ACCURACY,
         "score": (len(graded) - len(failures)) / len(graded),
-        "comment": json.dumps({
-            "passed": len(graded) - len(failures),
-            "total": len(graded),
-            "skipped_unresolvable": len(comparisons) - len(graded),
-            "by_kind": by_kind,
-            "failures": _capped([{k: f[k] for k in
-                                  ("kind", "company", "metric", "fiscal_year", "actual", "expected", "mape")}
-                                 for f in failures]),
-        }, ensure_ascii=False),
+        "comment": fmt.numeric_accuracy(graded, failures, len(comparisons) - len(graded), by_kind),
     }
 
 
@@ -240,23 +205,11 @@ def tag_completeness_evaluator(run, example):
     facts, tags = _facts_and_tags(run, example)
     result = check_tags(tags)
     if result["score"] is None:
-        return {"key": TAG_COMPLETENESS, "score": None,
-                "comment": "the response contains no <calc>/<number> tags at all - "
-                           "see all_values_tagged for whether it should have"}
+        return {"key": TAG_COMPLETENESS, "score": None, "comment": fmt.tag_completeness_untagged()}
     return {
         "key": TAG_COMPLETENESS,
         "score": result["score"],
-        "comment": json.dumps({
-            "complete_tags": result["complete_tags"],
-            "total_tags": result["total_tags"],
-            "by_kind": result["by_kind"],
-            "missing_field_counts": result["missing_field_counts"],
-            "derived_components_missing_id": result["derived_components"],
-            "ungradeable_after_recovery": len(unverifiable_facts(facts)),
-            "incomplete": _capped([{k: d[k] for k in ("kind", "line", "label", "value", "missing_attrs",
-                                                       "missing_ops_fields")}
-                                   for d in result["incomplete"]]),
-        }, ensure_ascii=False),
+        "comment": fmt.tag_completeness(result, len(unverifiable_facts(facts))),
     }
 
 
@@ -268,16 +221,11 @@ def company_coverage_evaluator(run, example):
     result = company_coverage(facts, expected)
     if result["score"] is None:
         return {"key": COMPANY_COVERAGE, "score": None,
-                "comment": f"no companies expected for this row ({source})"}
+                "comment": fmt.company_coverage_not_applicable(source)}
     return {
         "key": COMPANY_COVERAGE,
         "score": result["score"],
-        "comment": json.dumps({
-            "covered": len(result["covered"]),
-            "expected": len(result["expected"]),
-            "expectation_source": source,
-            "missing": result["missing"],
-        }, ensure_ascii=False),
+        "comment": fmt.company_coverage(result, source),
     }
 
 
@@ -301,8 +249,7 @@ def no_fabricated_companies_evaluator(run, example):
     return {
         "key": NO_FABRICATED_COMPANIES,
         "score": 0.0 if flagged else 1.0,
-        "comment": json.dumps(flagged, ensure_ascii=False) if flagged
-                   else f"all {len(named_companies)} companies named are real",
+        "comment": fmt.no_fabricated_companies(flagged, len(named_companies)),
     }
 
 
@@ -342,15 +289,16 @@ def answer_coverage_evaluator(run, example):
         result["timed_out_after_seconds"] = run.outputs.get("elapsed_seconds")
     elif result["score"] is None:
         return {"key": ANSWER_COVERAGE, "score": None,
-                "comment": "not applicable - the dataset row expects no specific companies/metrics/years"}
-    return {"key": ANSWER_COVERAGE, "score": result["score"], "comment": json.dumps(result, ensure_ascii=False)}
+                "comment": "not graded: this row expects no specific companies/metrics/years"}
+    return {"key": ANSWER_COVERAGE, "score": result["score"],
+            "comment": fmt.answer_coverage(result, result["metric_source"])}
 
 
 def answer_quality_evaluator(run, example):
     """LLM judge: on topic, well formatted, and actually answers the question."""
     verdict = _judge(run, "quality", judge_quality, example.inputs["prompt"], run.outputs["answer"])
     if verdict.get("judge_error"):
-        return {"key": ANSWER_QUALITY, "score": None, "comment": _judge_error_comment(verdict)}
+        return {"key": ANSWER_QUALITY, "score": None, "comment": fmt.judge_error(verdict)}
     score = 1.0 if (verdict["on_topic"] and verdict["well_formatted"] and verdict["answers_question"]) else 0.0
     return {"key": ANSWER_QUALITY, "score": score, "comment": verdict.get("reasoning")}
 
@@ -364,13 +312,12 @@ def security_evaluator(run, example):
     everywhere else, which is why config.THRESHOLDS gates this at 1.0."""
     verdict = _judge(run, "security", judge_security, example.inputs["prompt"], run.outputs["answer"])
     if verdict.get("judge_error"):
-        return {"key": SECURITY, "score": None, "comment": _judge_error_comment(verdict)}
+        return {"key": SECURITY, "score": None, "comment": fmt.judge_error(verdict)}
     violations = verdict.get("security_violations") or []
     return {
         "key": SECURITY,
         "score": 0.0 if violations else 1.0,
-        "comment": json.dumps(_capped(violations), ensure_ascii=False) if violations
-                   else "no security findings",
+        "comment": fmt.security(violations),
     }
 
 
@@ -387,7 +334,7 @@ def all_values_tagged_evaluator(run, example):
     verdict = _judge(run, "untagged_values", judge_untagged_values,
                       example.inputs["prompt"], run.outputs["answer"])
     if verdict.get("judge_error"):
-        return {"key": ALL_VALUES_TAGGED, "score": None, "comment": _judge_error_comment(verdict)}
+        return {"key": ALL_VALUES_TAGGED, "score": None, "comment": fmt.judge_error(verdict)}
     _, tags = _facts_and_tags(run, example)
     # `untagged_total` is the judge's full count; `untagged_values` is a
     # capped sample of it (see llm_judge.MAX_FINDINGS). Scoring on the sample
@@ -397,16 +344,11 @@ def all_values_tagged_evaluator(run, example):
     total = len(tags) + untagged_total
     if not total:
         return {"key": ALL_VALUES_TAGGED, "score": None,
-                "comment": "the response states no financial figures at all"}
+                "comment": fmt.all_values_tagged_no_figures()}
     return {
         "key": ALL_VALUES_TAGGED,
         "score": len(tags) / total,
-        "comment": json.dumps({
-            "tagged": len(tags),
-            "untagged": untagged_total,
-            "findings_shown": len(untagged),
-            "findings": _capped(untagged),
-        }, ensure_ascii=False),
+        "comment": fmt.all_values_tagged(len(tags), untagged_total, untagged),
     }
 
 

@@ -19,6 +19,9 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Temporarily untracked
+tests/utils/nuke_charts.py
+
 # Editors
 .vscode/
 .idea/

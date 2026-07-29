@@ -107,6 +107,20 @@ def _fetch_live(company, metric, fiscal_year, section="Financial Ratios"):
     return _value_for(chart_data, company, attribute_id, fiscal_year)
 
 
+# Chunk sizes for prefetch(). The endpoint returns a company x attribute grid
+# per period, so one request's cost is roughly its cell count - these cap a
+# single request at 25 x 40 x (years) cells, big enough that a whole example
+# is a handful of requests and small enough that one slow request doesn't
+# stall the run. Raise only with timing evidence; the win is already ~50x.
+BATCH_MAX_COMPANIES = 25
+BATCH_MAX_ATTRIBUTES = 40
+
+
+def _chunked(items, size):
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
+
+
 class GroundTruthClient:
     """Per-run cache over the chart-data/batch lookup, so repeated
     (company, metric, fiscal_year) lookups across dataset examples in a
@@ -114,23 +128,107 @@ class GroundTruthClient:
     created per eval run (see run_eval.py), not shared/reused across runs -
     it deliberately does not expire entries.
 
+    Callers that know their whole key set up front should call prefetch()
+    first and then get() - see prefetch's docstring for why that matters a
+    great deal.
+
     Safe to share across the threads LangSmith uses when examples run
     concurrently: the worst case is two threads racing to populate the same
     key, which costs one redundant (idempotent) fetch and never corrupts the
     cache. Not worth a lock, which would serialize every lookup."""
 
-    def __init__(self, fetch_fn=_fetch_live):
+    def __init__(self, fetch_fn=_fetch_live, batch_fetch_fn=fetch_chart_data):
         self._fetch_fn = fetch_fn
+        self._batch_fetch_fn = batch_fetch_fn
         self._cache = {}
+        self._requests = 0
 
     def get(self, company, metric, fiscal_year, section="Financial Ratios"):
-        key = (company, metric, fiscal_year, section)
+        key = (company, metric, str(fiscal_year), section)
         if key not in self._cache:
-            self._cache[key] = self._fetch_fn(company, metric, fiscal_year, section)
+            self._requests += 1
+            self._cache[key] = self._fetch_fn(company, metric, str(fiscal_year), section)
         return self._cache[key]
 
+    def prefetch(self, keys):
+        """Resolve many (company, metric, fiscal_year, section) keys in as few
+        requests as possible, populating the cache so the subsequent get()
+        calls are free.
+
+        This is not an optimisation, it's the difference between a usable
+        suite and an unusable one. chart-data/batch takes lists of companies
+        and attributes and returns the whole grid, so one request answers
+        hundreds of keys in the time a single-cell request takes (~2.7s
+        measured either way). Grading one sector-wide response one cell at a
+        time cost 693 requests and ~31 minutes - four times longer than the
+        agent call it was grading. Batched, the same set is a handful of
+        requests.
+
+        Keys are grouped by section and chunked (see BATCH_MAX_*); each
+        request spans min..max fiscal year of its group, which over-fetches
+        slightly and is still far cheaper than splitting by year.
+
+        Every cell in the returned grid is cached, including combinations
+        nobody asked for - they're already paid for. Keys the response has no
+        value for are cached as None, so a genuinely-unavailable metric isn't
+        re-requested one at a time by the get() fallback afterwards."""
+        by_section = {}
+        for company, metric, fiscal_year, section in keys:
+            key = (company, metric, str(fiscal_year), section)
+            if key in self._cache:
+                continue
+            group = by_section.setdefault(section, {"companies": set(), "metrics": set(), "years": set()})
+            group["companies"].add(company)
+            group["metrics"].add(metric)
+            group["years"].add(str(fiscal_year))
+
+        for section, group in by_section.items():
+            years = sorted(group["years"])
+            companies, metrics = sorted(group["companies"]), sorted(group["metrics"])
+            for company_chunk in _chunked(companies, BATCH_MAX_COMPANIES):
+                for metric_chunk in _chunked(metrics, BATCH_MAX_ATTRIBUTES):
+                    self._fetch_grid(section, company_chunk, metric_chunk, years[0], years[-1])
+
+    def _fetch_grid(self, section, companies, metrics, start_year, end_year):
+        """One batched request; caches every cell it covers. A failed request
+        is swallowed to a per-key None rather than raised: a single bad
+        attribute name shouldn't abort grading of an entire response, and the
+        keys it leaves as None are reported as "skipped" by the comparison
+        functions, which is the honest outcome - not graded, not failed."""
+        self._requests += 1
+        try:
+            chart_data = self._batch_fetch_fn(
+                companies=list(companies),
+                attributes=[{"section": section, "name": m} for m in metrics],
+                start_period=start_year, end_period=end_year,
+            )
+        except Exception:  # noqa: BLE001 - see docstring
+            chart_data = None
+
+        attribute_ids = {}
+        if chart_data:
+            for metric in metrics:
+                attribute_ids[metric] = _attribute_id(chart_data, section, metric)
+
+        periods = {p["period"]: p["values"] for p in (chart_data or {}).get("periods", [])}
+        for period, values in periods.items():
+            for company in companies:
+                for metric in metrics:
+                    attribute_id = attribute_ids.get(metric)
+                    value = values.get(f"{company}_{attribute_id}") if attribute_id else None
+                    self._cache.setdefault((company, metric, period, section), value)
+
+        # Anything the grid didn't cover (a period the API omitted entirely,
+        # or an attribute name it doesn't know) is settled as None here, so
+        # get() doesn't fall back to a single-cell request per miss - which
+        # would put back exactly the cost this method exists to remove.
+        for year in {str(y) for y in range(int(start_year), int(end_year) + 1)}:
+            for company in companies:
+                for metric in metrics:
+                    self._cache.setdefault((company, metric, year, section), None)
+
     def cache_info(self):
-        return {"cached_lookups": len(self._cache)}
+        return {"cached_lookups": len(self._cache), "api_requests": self._requests}
 
 
 def list_sector_companies(sector):

@@ -1,16 +1,21 @@
 """
 Lameh Intelligence - LLM judge client
 =======================================
-Thin wrapper around Claude via AWS Bedrock, used by helpfulness.py's
-relevance/usability check (LLM-as-judge). Kept separate from helpfulness.py
-so it can be swapped/mocked independently in tests.
+Thin wrapper around Claude via AWS Bedrock, used by llm_judge.py. Kept
+separate from it so the transport can be swapped/mocked independently of the
+rubric in tests.
 """
 
 from anthropic import AnthropicBedrock
 
 from config import AWS_ACCESS_KEY_ID, AWS_BEDROCK_MODEL_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY
 
-DEFAULT_MAX_TOKENS = 1024
+# The verdict is a JSON object carrying findings lists (untagged values, with
+# a quoted figure and surrounding context each), not just a few booleans - a
+# response with a dozen untagged figures runs well past the old 1024 ceiling.
+# A truncated reply is unparseable JSON, which surfaces as judge_error and
+# leaves every judged dimension unscored, so this is deliberately generous.
+DEFAULT_MAX_TOKENS = 4096
 
 
 def _client():

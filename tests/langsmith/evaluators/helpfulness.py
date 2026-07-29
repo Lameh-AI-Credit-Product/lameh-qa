@@ -1,27 +1,22 @@
 """
 Lameh Intelligence - helpfulness evaluators
 =============================================
-Two checks, independent of correctness:
-  - completeness_check: does the response cover every company/metric/fiscal
-    year the prompt asked for, and did the stream actually finish (vs a
-    truncated/cut-off response)?
-  - relevance_usability_judge: LLM-as-judge (Claude via Bedrock, see
-    judge_client.py) against a short rubric - stays on topic, usable/
-    well-formatted, doesn't dodge the question.
+completeness_check: does the response cover every company/metric/fiscal year
+the prompt asked for, and did the stream actually finish (vs a truncated/
+cut-off response)?
 
-Both take plain extraction.py fact dicts / raw text - no LangSmith or
-dataset coupling, so both are independently unit-testable (the judge check
-via a fake `ask_judge_fn`).
+Takes plain extraction.py fact dicts / raw text - no LangSmith or dataset
+coupling, so it's independently unit-testable.
+
+The LLM-judged half of helpfulness moved to llm_judge.py when the judge grew
+to cover security and untagged values as well as quality - keeping one judge
+call means one rubric, and it no longer belongs under a "helpfulness" name.
+This module is now the deterministic remainder; it still consumes the judge's
+`metrics_present` verdict via its `metrics_present` argument, passed in by
+the caller rather than fetched here.
 """
 
-import json
 import re
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from judge_client import ask_judge  # noqa: E402
-
 
 _STOPWORDS = {"of", "to", "the", "and", "a", "an", "for", "in", "on", "per", "by", "ratio", "ratios"}
 _WORD_RE = re.compile(r"[a-z0-9]+")
@@ -160,78 +155,3 @@ def completeness_check(facts, expected_companies=None, expected_metrics=None,
         "dimension_scores": dimension_scores,
         "score": score,
     }
-
-
-JUDGE_RUBRIC = """You are grading a financial-analysis assistant's response for Lameh Intelligence, a tool for Saudi capital-markets (Tadawul/Nomu) analysis.
-
-Score the RESPONSE against the ORIGINAL PROMPT on exactly three criteria:
-1. on_topic: does it address what was actually asked, without drifting into unrelated content?
-2. well_formatted: is it usable/readable (clear structure - tables, headings, etc. - not just a wall of run-on prose)?
-3. answers_question: does it give a real, substantive answer rather than dodging, refusing, or answering a different question than the one asked?
-{coverage_task}
-Respond with ONLY a JSON object, no other text, no markdown fences:
-{{{{"on_topic": true/false, "well_formatted": true/false, "answers_question": true/false, "reasoning": "one sentence"{coverage_field}}}}}
-
-ORIGINAL PROMPT:
-{{prompt}}
-
-RESPONSE:
-{{response}}
-"""
-
-# Appended only when the dataset row lists expected metrics. Metric coverage
-# is judged rather than string-matched because the agent renames freely -
-# "Cash Flow from Operating Activities" comes back as an "Operating CF"
-# column, "Cost of Revenue Breakdown" as a "COGS Composition" table - while
-# also *mentioning* metrics it failed to supply ("Note on Market Cap: batch
-# retrieval is not practical"). No string rule separated those two cases.
-_COVERAGE_TASK = """
-Then, for each metric in METRICS BELOW, decide whether the response actually
-PRESENTS that metric - i.e. gives real figures/values for it. A metric only
-mentioned by name, promised, or explained away as unavailable is NOT present.
-Match on meaning, not wording: a differently-named or abbreviated column
-("Operating CF" for "Cash Flow from Operating Activities") counts as present.
-
-METRICS TO CHECK:
-{metrics}
-"""
-
-_COVERAGE_FIELD = ', "metrics_present": {{"<metric name exactly as listed>": true/false, ...}}'
-
-_JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$")
-
-
-def _parse_judge_json(raw_text):
-    cleaned = _JSON_FENCE_RE.sub("", raw_text.strip())
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        return None
-
-
-def relevance_usability_judge(prompt_text, response_text, expected_metrics=(), ask_judge_fn=ask_judge):
-    """One judge call covering both judged dimensions: the quality rubric
-    (on_topic / well_formatted / answers_question) and, when
-    `expected_metrics` is non-empty, which of those metrics the response
-    actually presents.
-
-    Returns {"on_topic", "well_formatted", "answers_question", "reasoning",
-    "metrics_present": {metric: bool}, "judge_error"}. judge_error=True (with
-    a "raw_response" field instead of the parsed fields) means the judge's
-    reply wasn't valid JSON - a real failure to surface, not something to
-    silently paper over with a default verdict.
-
-    Both judged evaluators share this single call (see run_eval.py's cache),
-    so adding metric coverage costs no extra Bedrock requests."""
-    metrics = list(expected_metrics or [])
-    rubric = JUDGE_RUBRIC.format(
-        coverage_task=_COVERAGE_TASK.format(metrics="\n".join(f"- {m}" for m in metrics)) if metrics else "",
-        coverage_field=_COVERAGE_FIELD if metrics else "",
-    )
-    raw = ask_judge_fn(rubric.format(prompt=prompt_text, response=response_text))
-    parsed = _parse_judge_json(raw)
-    if parsed is None:
-        return {"judge_error": True, "raw_response": raw}
-    parsed["judge_error"] = False
-    parsed.setdefault("metrics_present", {})
-    return parsed

@@ -40,6 +40,7 @@ import re
 _ATTR_RE = re.compile(r'''(\w+)=(?:"([^"]*)"|'([^']*)')''')
 _CALC_RE = re.compile(r"<calc\s+([^>]*?)/>")
 _NUMBER_RE = re.compile(r"<number\s+([^>]*?)>(.*?)</number>", re.DOTALL)
+_ANY_TAG_RE = re.compile(r"<(calc|number)\b([^>]*?)/?>")
 _DATA_TABLE_RE = re.compile(r'<data_table\s+title="([^"]*)"\s*>')
 _FY_RE = re.compile(r"FY(\d{4})")
 
@@ -93,6 +94,34 @@ def parse_formatted_value(v_str):
     if unit in _UNIT_MULTIPLIERS:
         number *= _UNIT_MULTIPLIERS[unit]
     return number, _UNIT_LABELS.get(unit)
+
+
+def display_precision(v_str):
+    """Half a unit in the last decimal place the value was *printed* to, in
+    the same scale parse_formatted_value returns - i.e. the largest error
+    that could come from rounding alone.
+
+    "1.4%" -> 0.05, "0.17x" -> 0.005, "327 days" -> 0.5, "127.6M" -> 50000.0.
+
+    Needed because a relative tolerance can't tell a wrong number from a
+    rounded one. The agent prints ROE as "1.4%" where the true value is
+    1.4267% - correct to every digit it showed, but 1.9% off relatively,
+    which failed a 1% tolerance. Every numeric_accuracy failure in the first
+    run of this suite was this artifact. Comparing against the precision the
+    value was actually stated at is the only way to separate "the agent is
+    wrong" from "the agent rounded", and the former is the only one worth a
+    failing score.
+
+    Returns None if the value doesn't parse, leaving the caller on relative
+    tolerance alone."""
+    if not v_str:
+        return None
+    match = _VALUE_UNIT_RE.match(v_str)
+    if not match:
+        return None
+    number_str, unit = match.group(1).replace(",", ""), match.group(2).strip().lower()
+    decimals = len(number_str.split(".")[1]) if "." in number_str else 0
+    return 0.5 * (10 ** -decimals) * _UNIT_MULTIPLIERS.get(unit, 1)
 
 
 def _nearest_fiscal_year(text, pos):
@@ -222,6 +251,41 @@ def extract_calc_facts(text, default_company=None):
             "ops": ops,
         })
     return facts
+
+
+def extract_tags(text):
+    """Every <calc>/<number> tag as a *raw* record, before any interpretation:
+    {"kind", "attrs", "ops", "ops_error", "line", "start"}.
+
+    Deliberately separate from extract_number_facts/extract_calc_facts, which
+    interpret and back-fill (a <calc> with no `rid` gets a table_title, a
+    missing year gets recovered from the surrounding line). That back-filling
+    is right for grading values but wrong for grading the tags themselves -
+    tag_integrity.py has to see exactly which attributes the agent did and
+    did not emit, with no repairs applied.
+
+    Matches self-closing and paired tags alike, and does not require a closing
+    </number>, so a malformed tag is reported as incomplete rather than
+    silently skipped. `ops_error` is True when the `ops` attribute is present
+    but isn't valid JSON."""
+    tags = []
+    for match in _ANY_TAG_RE.finditer(text):
+        attrs = parse_attrs(match.group(2))
+        ops, ops_error = [], False
+        if attrs.get("ops"):
+            try:
+                ops = json.loads(attrs["ops"])
+            except json.JSONDecodeError:
+                ops_error = True
+        tags.append({
+            "kind": match.group(1),
+            "attrs": attrs,
+            "ops": ops,
+            "ops_error": ops_error,
+            "line": text.count("\n", 0, match.start()) + 1,
+            "start": match.start(),
+        })
+    return tags
 
 
 def extract_all(text, default_company=None):

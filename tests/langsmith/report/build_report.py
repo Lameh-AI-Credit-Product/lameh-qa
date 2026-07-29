@@ -8,10 +8,6 @@ sliced by sector and prompt type, applies configurable threshold gates
 to its LangSmith run (one-click trace debugging) and, when available, the
 orchestrator's own conversation_id (the agent-side thread).
 
-STATUS: safety.py doesn't exist yet, so the safety dimension is always
-reported as "not evaluated" here, not silently scored as passing - the
-overall readiness verdict can never be "ready" until it exists.
-
 Usage
 -----
     poetry run python tests/langsmith/report/build_report.py --experiment materials-sector-3a94b70b
@@ -27,18 +23,30 @@ from pathlib import Path
 from langsmith import Client
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import (ANSWER_COVERAGE, ANSWER_QUALITY, DATASET_NAME, EVALUATOR_KEYS,  # noqa: E402
-                     NO_FABRICATED_COMPANIES, NUMERIC_ACCURACY, THRESHOLDS)
+from config import (ALL_VALUES_TAGGED, ANSWER_COVERAGE, ANSWER_QUALITY, COMPANY_COVERAGE,  # noqa: E402
+                     DATASET_NAME, EVALUATOR_KEYS, NO_FABRICATED_COMPANIES, NUMERIC_ACCURACY,
+                     SECURITY, TAG_COMPLETENESS, THRESHOLDS)
 
 DIMENSION_KEYS = EVALUATOR_KEYS
 
 # Column headers for the breakdown tables - the evaluator keys, title-cased.
 DIMENSION_LABELS = {
     NUMERIC_ACCURACY: "Numeric Accuracy",
+    TAG_COMPLETENESS: "Tag Completeness",
+    COMPANY_COVERAGE: "Company Coverage",
     NO_FABRICATED_COMPANIES: "No Fabricated Companies",
     ANSWER_COVERAGE: "Answer Coverage",
     ANSWER_QUALITY: "Answer Quality",
+    SECURITY: "Security",
+    ALL_VALUES_TAGGED: "All Values Tagged",
 }
+
+# Which dimensions gate release, and how. Everything else is reported but
+# doesn't block: answer_coverage and no_fabricated_companies are diagnostic
+# (a missing metric is a prompt-design question as often as an agent bug),
+# while these five are "the output is wrong or unverifiable".
+GATED_KEYS = (NUMERIC_ACCURACY, TAG_COMPLETENESS, COMPANY_COVERAGE, ALL_VALUES_TAGGED,
+              ANSWER_QUALITY, SECURITY)
 
 
 def fetch_experiment_results(experiment_name, client=None):
@@ -99,20 +107,24 @@ def _gate(value, threshold, comparison_ok):
 
 
 def apply_thresholds(overall, thresholds=THRESHOLDS):
-    gates = {
-        NUMERIC_ACCURACY: _gate(overall.get(NUMERIC_ACCURACY), thresholds[NUMERIC_ACCURACY], lambda v, t: v >= t),
-        ANSWER_QUALITY: _gate(overall.get(ANSWER_QUALITY), thresholds[ANSWER_QUALITY], lambda v, t: v >= t),
-        "safety": {"value": None, "threshold": thresholds["safety_violations_allowed"], "status": "not_evaluated"},
-    }
-    statuses = {gates[NUMERIC_ACCURACY]["status"], gates[ANSWER_QUALITY]["status"], gates["safety"]["status"]}
-    if "not_evaluated" in statuses:
-        overall_status = "not_ready (safety not evaluated - safety.py not built yet)"
-    elif statuses == {"ready"}:
-        overall_status = "ready"
+    """Each gated dimension against its configured threshold, plus a single
+    overall verdict.
+
+    A dimension with no graded data anywhere in the run is "undetermined",
+    never "ready" - a gate that nothing exercised has not been passed. One
+    not_ready gate is enough to fail the run overall, since these are the
+    dimensions where a failure means the output is wrong or unverifiable
+    rather than merely thin."""
+    gates = {key: _gate(overall.get(key), thresholds[key], lambda v, t: v >= t) for key in GATED_KEYS}
+    statuses = {gates[key]["status"] for key in GATED_KEYS}
+    if "not_ready" in statuses:
+        failing = sorted(DIMENSION_LABELS[k] for k in GATED_KEYS if gates[k]["status"] == "not_ready")
+        overall_status = f"not_ready ({', '.join(failing)})"
     elif "undetermined" in statuses:
-        overall_status = "undetermined (insufficient data)"
+        undetermined = sorted(DIMENSION_LABELS[k] for k in GATED_KEYS if gates[k]["status"] == "undetermined")
+        overall_status = f"undetermined (no data for: {', '.join(undetermined)})"
     else:
-        overall_status = "not_ready"
+        overall_status = "ready"
     gates["overall"] = overall_status
     return gates
 
@@ -136,9 +148,8 @@ def render_markdown(experiment_name, rows, aggregates, gates):
     lines.append("\n## Overall Readiness Gates\n")
     lines.append("| Dimension | Score | Threshold | Status |")
     lines.append("|---|---|---|---|")
-    lines.append(_fmt_gate_row(DIMENSION_LABELS[NUMERIC_ACCURACY], gates[NUMERIC_ACCURACY]))
-    lines.append(_fmt_gate_row(DIMENSION_LABELS[ANSWER_QUALITY], gates[ANSWER_QUALITY]))
-    lines.append(f"| Safety | n/a | 0 violations allowed | {gates['safety']['status']} |")
+    for key in GATED_KEYS:
+        lines.append(_fmt_gate_row(DIMENSION_LABELS[key], gates[key]))
     lines.append(f"\n**Overall: {gates['overall']}**")
 
     header = " | ".join(DIMENSION_LABELS[k] for k in DIMENSION_KEYS)
@@ -185,7 +196,7 @@ def default_out_path(experiment_name):
 
 
 def missing_feedback(rows, expected_example_count=None):
-    """Which examples don't yet have all four evaluator scores recorded.
+    """Which examples don't yet have every evaluator score recorded.
 
     Feedback is uploaded asynchronously and lands per-example, so an
     experiment queried too early looks like a *smaller* run rather than an

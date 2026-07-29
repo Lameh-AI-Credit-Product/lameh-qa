@@ -245,41 +245,53 @@ def select_all_ratios(page, logger=None):
     for section in [
         "Solvency Ratios", "Profitability Ratios", re.compile(r"^Profitability$"),
         "Performance", "Margins", "Liquidity Ratios", "Free Cash Flow",
-        "Financing", "DuPont Analysis", "Coverage", "Asset Valuation",
+        "Financing", "Enterprise Value", "DuPont Analysis", "Coverage",
+        "Asset Valuation", "Activity Ratios",
     ]:
         click_section_if_present(page, section, logger=logger)
-    page.get_by_role("button", name="Expand subsection").click()
+    # page.get_by_role("button", name="Expand subsection").click()
 
+    # Some of these no longer appear in the app (it drops/renames ratios from
+    # time to time) - they're kept on the chance another company template
+    # still has them, and just log "ratio not available" when they don't.
     ratio_labels = [
         "Cash Conversion Cycle", "Days Inventory on Hand (DIO)",
         "Days Payables Outstanding (", "Days Sales Outstanding (DSO)",
-        "Inventory Turnover", "Payables Turnover", "Receivables Turnover",
-        "Total Assets Turnover", "Working Capital Turnover",
-        "Book Value of Equity", "CFO Finance Cost Coverage", "Debt Coverage",
+        "Fixed Asset Turnover", "Inventory Turnover", "Payables Turnover",
+        "Receivables Turnover", "Total Assets Turnover",
+        "Working Capital Turnover",
+        "Book Value of Equity", "CFO Interest Coverage", "Debt Coverage",
         "Debt Payment Ratio", "Dividend Payment Coverage", "EBITDA Coverage",
-        "Interest Coverage", "OCF Debt Service Ratio (OCF",
+        "OCF Debt Service Ratio (OCF", "Investing and Financing",
         "Operating Cash Flow to", "Reinvestment Ratio", "Interest Burden",
-        "Tax Burden", "Net Borrowing", "Total Debt Service",
+        "Tax Burden", "EV/EBITDA", "EV/Revenue", "Enterprise Value (EV)",
+        "Net Borrowing", "Total Debt Service",
         "Free Cash Flow (FCF)", "Free Cash Flow to Equity (",
-        "Free Cash Flow to Firm - FCFF", "Cash Ratio", "Current Ratio",
+        "Free Cash Flow to Firm (FCFF)", "Cash Ratio", "Current Ratio",
         "Quick Ratio", "EBIT Margin", "EBITDA Margin", "Gross Profit Margin",
         "Net Profit Margin", "Operating Profit Margin", "Pretax Profit Margin",
+        "Return on Sales",
         "CapEx to Depreciation", "CapEx to Revenue", "Cash Flow Quality",
         "Cash Flow to Revenue", "Cash Return on Assets",
         "Cash Return on Equity", "Cash to Operating Income",
         "Dividend Payout Ratio", "Retention Ratio",
-        "NOPAT (Tax Rate Assumed Zero)", "Operating Return on Assets",
-        "ROA Adjusted (Tax Rate", "ROE (DuPont 3-Factor)",
+        "NOPAT", "Operating Return on Assets",
+        "ROA Adjusted", "ROE (DuPont 3-Factor)",
         "ROE (DuPont 5-Factor)", "Return on Assets (ROA)",
-        "Return on Equity (ROE)", "Debt to Assets", "Debt to Capital",
+        "Return on Equity (ROE)", "Return on Invested Capital (",
+        "Debt to Assets", "Debt to Capital",
         "Debt to Equity", "Financial Leverage", "Net Debt to EBITDA",
     ]
     for label in ratio_labels:
         click_ratio_if_present(page, label, logger=logger)
 
     # Exact-match labels: substrings above (e.g. "Debt to EBITDA" vs
-    # "Net Debt to EBITDA") would otherwise match the wrong element.
-    for label in ["Working Capital", "EBITDA", "Gross Profit", "Debt to EBITDA", "Net Debt", "Total Debt"]:
+    # "Net Debt to EBITDA", "Interest Coverage" vs "CFO Interest Coverage")
+    # would otherwise match the wrong element.
+    for label in [
+        "Working Capital", "EBITDA", "Gross Profit", "Debt to EBITDA",
+        "Net Debt", "Total Debt", "Interest Coverage", "Operating Income",
+    ]:
         click_ratio_if_present(page, label, exact=True, logger=logger)
 
 

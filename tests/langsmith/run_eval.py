@@ -79,10 +79,12 @@ REPORT_FETCH_ATTEMPTS = 3
 REPORT_RETRY_DELAY_SECONDS = 10
 
 # Each prompt is a 7-10 minute agent call that's almost entirely network wait,
-# so examples are run in parallel by default - the dataset is 4 rows, hence 4.
-# Raise via --max-concurrency if the dataset grows; lower it to 1 if the
-# orchestrator starts rate-limiting or the parallel load skews response times.
-DEFAULT_MAX_CONCURRENCY = 4
+# so examples are run in parallel by default - one per dataset row, currently
+# 8 (4 prompt types x 2 sectors). Anything lower runs the set in waves and
+# multiplies wall time by the number of waves. Lower it via --max-concurrency
+# if the orchestrator starts rate-limiting or the parallel load skews response
+# times; raise it in step with the dataset.
+DEFAULT_MAX_CONCURRENCY = 8
 
 # Wall-clock budget per prompt, overridable with --agent-timeout. Module-level
 # because LangSmith calls target() itself and gives us nowhere to pass it.
@@ -179,9 +181,10 @@ def numeric_accuracy_evaluator(run, example):
     comparisons = (numeric_comparison(facts, _ground_truth_client)
                    + ops_component_comparison(facts, _ground_truth_client))
     graded = [c for c in comparisons if not c["skipped"]]
+    skipped = [c for c in comparisons if c["skipped"]]
     if not graded:
         return {"key": NUMERIC_ACCURACY, "score": None,
-                "comment": fmt.numeric_accuracy_unresolvable(len(comparisons))}
+                "comment": fmt.numeric_accuracy_unresolvable(skipped)}
     failures = [c for c in graded if not c["within_tolerance"]]
     by_kind = {}
     for comparison in graded:
@@ -191,7 +194,7 @@ def numeric_accuracy_evaluator(run, example):
     return {
         "key": NUMERIC_ACCURACY,
         "score": (len(graded) - len(failures)) / len(graded),
-        "comment": fmt.numeric_accuracy(graded, failures, len(comparisons) - len(graded), by_kind),
+        "comment": fmt.numeric_accuracy(graded, failures, skipped, by_kind),
     }
 
 

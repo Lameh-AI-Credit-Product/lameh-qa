@@ -26,17 +26,16 @@ parsed unit (not the API's `unit` metadata field, which is unreliable: it
 labels DSO's unit as "SAR" even though it's actually a day count).
 """
 
-import json
 import sys
 from pathlib import Path
 
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import CHART_DATA_ORGANIZATION_ID, CHART_DATA_URL, ORCHESTRATOR_API_KEY  # noqa: E402
+from config import (CHART_DATA_ORGANIZATION_ID, CHART_DATA_URL,  # noqa: E402
+                     ORCHESTRATOR_API_KEY, SECTORS_GROUPED_URL)
 
 DEFAULT_TIMEOUT_SECONDS = 60
-SECTOR_COMPANIES_PATH = Path(__file__).resolve().parent.parent / "dataset" / "sector_companies.json"
 
 
 def _headers():
@@ -231,21 +230,50 @@ class GroundTruthClient:
         return {"cached_lookups": len(self._cache), "api_requests": self._requests}
 
 
-def list_sector_companies(sector):
-    """All companies the live data considers part of `sector` - used by the
-    grounding check for sector-wide prompts (Q2/Q3-style, where the dataset
-    row has no fixed `companies` list) and to validate that every company the
-    agent names in a `companies`-scoped prompt is real.
+# One GET covers every sector, and a run needs at most a couple of rosters,
+# so it's fetched once per process and sliced from there. Same threading
+# rationale as GroundTruthClient: a race costs one redundant idempotent GET.
+_rosters = None
 
-    Backed by dataset/sector_companies.json - a static roster captured from a
-    real chart-data/batch request (chart-data/batch itself takes an explicit
-    company list as input rather than exposing a way to enumerate one, so
-    there's no live "list companies in this sector" call to make instead).
-    This roster can drift from the live company set over time - re-derive it
-    from a fresh batch call if grounding checks start flagging real
-    companies as fabricated."""
-    with open(SECTOR_COMPANIES_PATH, encoding="utf-8") as f:
-        rosters = json.load(f)
-    if sector not in rosters:
-        raise KeyError(f"No company roster for sector {sector!r} in {SECTOR_COMPANIES_PATH}")
-    return rosters[sector]
+
+def _fetch_rosters():
+    """{name_en: [Arabic company name, ...]} for every sector.
+
+    Only companies with `uploaded: true` are included, and that filter is the
+    whole point rather than a detail. `uploaded` marks the companies whose
+    financials are actually in the system; the rest are listed on the exchange
+    but have nothing for the agent to read. Counting them would make every
+    sector-wide prompt fail coverage for companies no answer could ever cover
+    - Health Care is 10 uploaded out of 27 listed. (Materials happens to be
+    68 of 68, which is why the distinction stayed invisible until a second
+    sector was added.)"""
+    if SECTORS_GROUPED_URL is None:
+        raise RuntimeError(
+            "Sector API not configured - set LAMEH_ORCHESTRATOR_URL / LAMEH_API_KEY in .env.")
+    response = requests.get(SECTORS_GROUPED_URL, headers=_headers(), timeout=DEFAULT_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    return {
+        group["sector"]["name_en"]: [c["name_ar"] for c in group["companies"] if c.get("uploaded")]
+        for group in response.json()
+    }
+
+
+def list_sector_companies(sector):
+    """Every company with data that the live system considers part of
+    `sector`, by Arabic name - used to give sector-wide prompts (Q2/Q3-style,
+    where the dataset row has no fixed `companies` list) a coverage
+    expectation, and to validate that every company the agent names is real.
+
+    Fetched live, like every other piece of ground truth in this suite, so a
+    roster can't go stale between runs. `sector` is matched against the API's
+    `name_en`, which is exactly what prompt_set.json's `sector` field holds
+    ("Materials", "Health Care Equipment & Svc").
+
+    Raises KeyError for a sector the API doesn't know; callers treat that as
+    "nothing to check" rather than as a failure."""
+    global _rosters
+    if _rosters is None:
+        _rosters = _fetch_rosters()
+    if sector not in _rosters:
+        raise KeyError(f"No sector named {sector!r} - known sectors: {sorted(_rosters)}")
+    return _rosters[sector]

@@ -18,11 +18,13 @@ poetry run poe langsmith-run               # run the experiment + build the repo
 poetry run poe langsmith-report --experiment <name>   # rebuild a report only
 ```
 
-A full run is ~9 minutes: four prompts in parallel at 7–10 min each, plus
-under a minute of evaluator overhead. Useful flags on `langsmith-run`:
+A full run is ~10 minutes: the prompts run in parallel at 7–10 min each, plus
+under a minute of evaluator overhead. The set is 4 prompt types × 2 sectors
+(Materials, Health Care Equipment & Svc) = 8 rows, so a run is also 32 judge
+calls. Useful flags on `langsmith-run`:
 
 - `--example-id materials-q1-cash-quality` — one prompt only, for a fast loop
-- `--max-concurrency N` — default 4 (= the dataset size); use 1 to serialize
+- `--max-concurrency N` — default 8 (= the dataset size); use 1 to serialize
 - `--agent-timeout SECONDS` — default 600; a prompt past it is cut off, scored
   on the text that arrived, and fails `answer_coverage` as truncated
 - `--skip-report`
@@ -128,6 +130,14 @@ Note it uses a *different* organization-id from the agent conversations.
   add a comparison path, prefetch it — don't reintroduce per-cell `get()`.
 - Percent ratios come back as fractions (`0.0535`) while tags display
   `"5.35%"`.
+- Sector rosters come from `/v0/chart-builder/sectors/grouped-by-companies`
+  (one GET, all sectors), filtered to **`uploaded: true`** — the companies
+  whose financials are actually loaded. The rest are listed on the exchange
+  with nothing for the agent to read, so counting them would fail coverage
+  for companies no answer could ever cover. Health Care is 10 uploaded of 27
+  listed; Materials is 68 of 68, which is why the distinction stayed
+  invisible while there was only one sector. `chart-data/batch` cannot
+  enumerate — it 500s on an empty company list whatever `sectors` you pass.
 - Tolerance is 1% relative (`metrics.DEFAULT_TOLERANCE`). `<calc>` additionally
   gets a half-ULP allowance on its *printed* precision via `display_precision`,
   because `"1.4%"` vs a true `1.4267%` is rounding, not error. `<number>` does
@@ -149,10 +159,28 @@ unscored.
 
 Verify before acting on these; they are snapshots, not invariants.
 
-- **`dataset/sector_companies.json` is stale.** It holds 68 Materials
-  companies; the live roster has 69. `no_fabricated_companies` therefore
-  reports a false FAIL on q2 and q3 for `شركة هضاب الخليج التجارية`. Re-derive
-  from a fresh batch call.
+- **`شركة هضاب الخليج التجارية` (materials q2/q3) is a genuine fabrication.**
+  It was previously written off as roster drift; that was wrong. A scan of all
+  23 groups — 404 companies — finds no such company anywhere, and the old
+  static roster turned out to match the live uploaded Materials set exactly
+  (68/68). `no_fabricated_companies` was right both times it fired.
+- **chart-data lags the app on ratio names.** The app renamed four ratios
+  (commit `d4dd0a6`); `chart-data/batch` still answers only to the *old* name
+  for three of them — `CFO Finance Cost Coverage`, `NOPAT (Tax Rate Assumed
+  Zero)`, `ROA Adjusted (Tax Rate Assumed Zero)`. The eight newly-added ratios
+  (`Fixed Asset Turnover`, `Return on Sales`, `Return on Invested Capital`,
+  `EV/EBITDA`, `EV/Revenue`, `Enterprise Value (EV)`, `Operating Income`,
+  `Investing and Financing`) don't exist there at all, and no section holds
+  market data — `Market Cap`, `P/E` and `Share Price` resolve under none of
+  `Financial Ratios`, `Market Data`, `Market Ratios`, `Valuation` or
+  `Enterprise Value`. So q4's "EV/EBITDA if data available" and every market
+  figure are unverifiable by design, not by fault.
+
+  This fails *silently and upward*: an unresolvable metric leaves the
+  denominator instead of failing, so the score rises as coverage falls. The
+  `numeric_accuracy` comment now names the metrics that resolved for nobody —
+  that list is the rename detector. Treat a new name appearing in it as an
+  API/app divergence until proven otherwise.
 - **q2's numeric accuracy is `n/a`.** 693 facts extracted, none resolvable —
   cost-of-revenue component names aren't attributes in `chart-data`. Its 1402
   tags are consequently unverified by any value check, so its
@@ -162,15 +190,37 @@ Verify before acting on these; they are snapshots, not invariants.
   reported ~71x the DB value; Saudi Paper FY2025 Net Profit ~45% off; q1/q4
   ad-hoc `<calc>` tags omit `rid`/`id`/`ops` fields (tag completeness 0.59–0.74);
   q2 omits all 10 cement companies from a sector-wide answer.
+- **Al-Modawat (`شركة المداواة التخصصية الطبية`, healthcare-q1) has almost no
+  data**: FY2025 only, and only Total Assets and ROE (0.0) — no revenue, no
+  net profit, no CFO. The name is correct and it is an uploaded company; the
+  figures aren't there. q1 asks for DSO/ROE/CapEx across FY2023–25, so "not
+  available" is the correct answer for it and `company_coverage` will sit
+  near 0.75 on that row.
 - **Flake:** q4 has returned a completely empty answer on one run and a full
   one the next.
+- The Health Care rows have never been run. Everything above about them is
+  from the dataset and the API, not from an observed run.
 
 ## Conventions
 
 - Dataset rows are `prompt_set.json`; metadata keys (`scope`, `companies`,
   `metrics_expected`, `fiscal_years`, `sector`) drive what each evaluator
   expects. A `scope: "sector"` row carries `companies: []` and falls back to
-  the roster — see `_expected_companies`.
+  the roster — see `_expected_companies`. Adding a sector is adding rows;
+  `build_dataset.py` never needs to change, and `sector` must equal the API's
+  `name_en` exactly ("Health Care Equipment & Svc", not "... & Services").
+- `companies` metadata must be the **Arabic** name exactly as the DB spells
+  it, even where the prompt text names the company in English (both q4 rows
+  do this) — matching is exact string equality. Don't transliterate by hand;
+  take `name_ar` from the roster endpoint. Canadian Medical Center Co. is
+  `شركة مجمع المركز الكندي الطبي العام`, which is not what you'd guess.
+- Verify a new company name resolves before trusting it, **and verify with a
+  metric that has data**: a wrong name and an empty metric both return `None`.
+  `Revenue` is empty for every company checked so far; `Net Profit for the
+  Period` works.
+- `DATASET_NAME` is still `materials-sector-v1` and `experiment_prefix` is
+  still `materials-sector`, both now covering two sectors. Renaming the
+  dataset starts a fresh one and leaves past experiments on the old.
 - Renaming an evaluator key starts a *new* metric in LangSmith; past
   experiments keep the old one. Rename deliberately.
 - Feedback comments are built by `comment_format.py`, not by the evaluators,

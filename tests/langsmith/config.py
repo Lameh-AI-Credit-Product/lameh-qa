@@ -32,6 +32,12 @@ ORCHESTRATOR_USER_ID = os.environ.get("LAMEH_USER_ID")
 CHART_DATA_URL = f"{ORCHESTRATOR_URL}/v0/chart-builder/chart-data/batch" if ORCHESTRATOR_URL else None
 CHART_DATA_ORGANIZATION_ID = os.environ.get("LAMEH_CHART_DATA_ORGANIZATION_ID", "00000000-0000-0000-0000-000000000000")
 
+# Sector rosters. One GET returns every sector with its companies, so this is
+# the enumeration chart-data/batch can't do (that endpoint takes companies as
+# input and 500s on an empty list, whatever `sectors` it's given).
+SECTORS_GROUPED_URL = (f"{ORCHESTRATOR_URL}/v0/chart-builder/sectors/grouped-by-companies"
+                       if ORCHESTRATOR_URL else None)
+
 # --- LLM judge (Claude via AWS Bedrock) - used by helpfulness.py's
 # relevance/usability check. ---
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")

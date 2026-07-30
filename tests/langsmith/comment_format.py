@@ -61,9 +61,14 @@ def _listing(items, render, limit=MAX_COMMENT_ITEMS):
     return lines
 
 
-def _counts(mapping):
+def _counts(mapping, limit=None):
     """{"ops.id": 12, "rid": 9} -> "ops.id x12, rid x9"."""
-    return ", ".join(f"{name} x{count}" for name, count in mapping.items())
+    items = list(mapping.items())
+    shown = items if limit is None else items[:limit]
+    text = ", ".join(f"{name} x{count}" for name, count in shown)
+    if limit is not None and len(items) > limit:
+        text += f", ... and {len(items) - limit} more"
+    return text
 
 
 def _plural(count, singular, plural=None):
@@ -76,7 +81,52 @@ def _joined(lines):
 
 # --- numeric_accuracy -------------------------------------------------------
 
-def numeric_accuracy(graded, failures, skipped_count, by_kind):
+def _metric_label(comparison):
+    """A skipped comparison's metric, qualified by section when it isn't the
+    default - "Revenue" means something different in each statement."""
+    metric = comparison.get("metric") or "(unnamed)"
+    section = comparison.get("section")
+    return metric if section in (None, "Financial Ratios") else f"{metric} [{section}]"
+
+
+def _tally(comparisons):
+    tally = {}
+    for comparison in comparisons:
+        label = _metric_label(comparison)
+        tally[label] = tally.get(label, 0) + 1
+    return dict(sorted(tally.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def _unresolved_lines(graded, skipped):
+    """Splits the skipped comparisons into the two cases that need different
+    responses.
+
+    A metric that resolved for *some* company in this response and not others
+    is ordinary missing data - that company genuinely has no value for it.
+
+    A metric that resolved for *nobody* is a name chart-data doesn't know, and
+    that is worth surfacing by name, because the endpoint gives no other
+    signal: it slugifies and echoes back any attribute name you send it, so a
+    renamed ratio and an absent value are identical from here - both just
+    return None and drop out of the score. Ratios really have been renamed
+    app-side while chart-data kept the old names (CFO Finance Cost Coverage ->
+    CFO Interest Coverage, and others), and the only symptom was this count
+    going up while the score went up with it."""
+    resolved = {_metric_label(c) for c in graded}
+    never = _tally([c for c in skipped if _metric_label(c) not in resolved])
+    partial = _tally([c for c in skipped if _metric_label(c) in resolved])
+
+    lines = []
+    if never:
+        lines.append(f"- never resolved for any company here - suspect a renamed or "
+                      f"unknown attribute: {_counts(never, limit=MAX_COMMENT_ITEMS)}")
+    if partial:
+        lines.append(f"- resolved for other companies, absent for these: "
+                      f"{_counts(partial, limit=MAX_COMMENT_ITEMS)}")
+    return lines
+
+
+def numeric_accuracy(graded, failures, skipped, by_kind):
     passed = len(graded) - len(failures)
     headline = f"{passed}/{len(graded)} values match ground truth"
     if failures:
@@ -86,9 +136,10 @@ def numeric_accuracy(graded, failures, skipped_count, by_kind):
     if by_kind:
         lines.append("- by kind: " + ", ".join(
             f"{kind} {counts['passed']}/{counts['total']}" for kind, counts in sorted(by_kind.items())))
-    if skipped_count:
-        lines.append(f"- {skipped_count} skipped: metric not resolvable in ground truth "
-                      f"(a tag-integrity signal, not a wrong value)")
+    if skipped:
+        lines.append(f"- {len(skipped)} skipped as unresolvable - excluded from the score "
+                      f"rather than counted wrong, so this number rising means less was checked")
+        lines.extend(_unresolved_lines(graded, skipped))
 
     def _failure(comparison):
         return (f"{comparison.get('kind')} | {comparison.get('company')} | {comparison.get('metric')}"
@@ -98,9 +149,14 @@ def numeric_accuracy(graded, failures, skipped_count, by_kind):
     return _joined(lines + _listing(failures, _failure))
 
 
-def numeric_accuracy_unresolvable(total_facts):
-    return (f"not graded: {total_facts} facts extracted, none resolvable against ground truth "
-            f"- the metric names in this response aren't attributes in chart-data")
+def numeric_accuracy_unresolvable(comparisons):
+    """Nothing in the response could be looked up. The metric names are the
+    whole diagnosis here, so they lead - "693 facts, none resolvable" said
+    only that something was wrong, never what."""
+    lines = [f"not graded: {len(comparisons)} facts extracted, none resolvable against "
+             f"ground truth - chart-data has no attribute by these names",
+             f"- {_counts(_tally(comparisons), limit=MAX_COMMENT_ITEMS)}"]
+    return _joined(lines)
 
 
 # --- tag_completeness -------------------------------------------------------

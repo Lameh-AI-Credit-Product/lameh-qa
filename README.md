@@ -9,6 +9,7 @@ QA tooling and scope documentation for the Lameh platform.
 - **`tests/integration/sector_analysis_ratios.py`** — standalone script that verifies internal consistency of every "Financial Ratios" metric in a Sector Analysis chart-builder export, by recomputing each ratio from its own reported input components. Supports a single `.xlsx` file or a whole `--dir` of them (one bad file doesn't stop the batch).
 - **`tests/integration/summarize_ratio_failures.py`** — post-processing step that aggregates the FAIL rows across all the CSV reports written by `sector_analysis_ratios.py` into one row per ratio (Web/Excel fail counts, split into quarterly/yearly), so a bug affecting one ratio across many companies is visible as a single line instead of buried in dozens of per-company files.
 - **`tests/E2E/sector_analysis_download_company_ratios.py`** — Playwright script that logs in once (manual OTP), then loops through a list of companies building a "select all ratios" Sector Analysis and downloading each Excel export under `data/`.
+- **`tests/E2E/ratio_coverage.py`** — post-processing step over one download run: of the ratios the download script asks for, how many companies actually got each one. Every ratio starts at full coverage and each "ratio not available, skipping" line in `run.log` takes one company off it, sorted rarest-first. Separates a genuine per-company data gap from a ratio the app no longer offers under that name at all.
 - **`tests/langsmith/`** — LangSmith eval suite for the Lameh Intelligence module (the LLM agent that answers financial-analysis prompts). Builds a prompt-set dataset, runs it against the live agent, grades each response for correctness (live ground-truth comparison), helpfulness (completeness + LLM-as-judge), and safety (not yet built), then produces a markdown production-readiness report. See [tests/langsmith/config.py](tests/langsmith/config.py) for thresholds/settings.
 - **`results/`** — generated CSV reports from running the ratio-verification script (gitignored).
 - **`data/`** — downloaded `.xlsx` exports from the E2E script (gitignored).
@@ -62,6 +63,16 @@ Run the E2E download script (opens a browser window, waits for you to complete O
 ```
 poetry run poe download-ratios
 ```
+
+Then check how much of the ratio list that run actually came back with:
+
+```
+poetry run poe ratio-coverage data/sector-analysis/<timestamp> [--resolve-names] [--max-coverage 0] [--csv out.csv]
+```
+
+Writes `_ratio-coverage.csv` into the run directory and prints the table. A ratio at 0% is a different finding from one at 6%: 6% is a data gap (most companies genuinely have no such figure), while 0% means the app has no ratio under that name at all — it was renamed or removed and the download script has been asking for a label that stopped existing. `--resolve-names` opens the exports to recover the name each label actually matched, which is what tells a rename apart from a removal; it's off by default because it reads every file in the run. `--max-coverage 0` prints only the ones that are gone entirely.
+
+This reads the ratio labels straight out of the download script's source, so that script needs no edits to stay in sync. It can only report on labels the download script asks for — a ratio the app offers under a name we don't know is never clicked, never skipped, and so invisible here.
 
 ### LangSmith eval suite (Lameh Intelligence)
 

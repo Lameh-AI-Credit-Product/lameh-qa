@@ -2,7 +2,10 @@
 
 > Scope note: this file covers `sector_analysis_ratios.py` only. The
 > LangSmith eval suite for the Intelligence agent is documented separately in
-> [`tests/langsmith/AGENT.md`](tests/langsmith/AGENT.md).
+> [`tests/langsmith/AGENT.md`](tests/langsmith/AGENT.md). The E2E scripts
+> under `tests/E2E/` document themselves in their module docstrings — read
+> `ratio_coverage.py`'s before changing how it finds the download script's
+> ratio labels, since it parses them out of that file's source.
 
 This file documents `sector_analysis_ratios.py` for future agent sessions. In
 this repo it is a **standalone** file with no dependency on the rest of the

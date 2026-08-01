@@ -31,6 +31,7 @@ dev = [
 ratios = "python tests/integration/sector_analysis_ratios.py"
 ratios-summary = "python tests/integration/summarize_ratio_failures.py"
 download-ratios = "python tests/E2E/sector_analysis_download_company_ratios.py"
+ratio-coverage = "python tests/E2E/ratio_coverage.py"
 langsmith-build-dataset = "python tests/langsmith/dataset/build_dataset.py"
 langsmith-run = "python tests/langsmith/run_eval.py"
 langsmith-report = "python tests/langsmith/report/build_report.py"

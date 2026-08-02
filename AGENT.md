@@ -162,6 +162,21 @@ path) has two fallbacks, because export layouts differ:
   a note), not a FAIL — it's not a math error, but it is a product concern: a
   company with "Total Debt: not retrieved" currently renders identically to
   a company with genuinely zero debt (0.0x).
+  `Net Borrowing` shows the same pattern: in the 2026-08-01 run, 8 companies
+  report `0` for 61 periods in which neither `CFF - Proceeds from Loans` nor
+  `CFF - Repayment of Loans` exists at all. The formula deliberately does
+  *not* assume 0 there — it reports those periods as unverifiable, because
+  the other 228 input-less periods report nothing rather than 0, and treating
+  the absence as zero would turn all of them into false REPORTED-MISSING
+  rows.
+- **A blank reported value is a FAIL unless the computable value is 0.**
+  When the export shows nothing but its own reported inputs do support a
+  value, that is the app hiding a number it has the data to display, and it
+  is treated like any other mismatch. The exception is a computable value of
+  `0`: blank and `0` render the same to a user, so those stay as
+  `REPORTED-MISSING` (reported separately, not counted as failures). Note
+  that a FAIL of this kind has `reported = None` and therefore no `Diff %` —
+  anything consuming the results tuple must tolerate that.
 - **Excel's own behavior on a formula cell**: opening a file and forcing
   recalculation *always* evaluates the formula — it never leaves a formula
   cell blank. If the formula's own logic can compute a number from available
@@ -170,6 +185,59 @@ path) has two fallbacks, because export layouts differ:
   `IFERROR(..., "-")` with a missing input), it displays that literal `"-"`
   fallback — not empty. A cell is only ever *truly*, permanently empty if it
   has no formula at all to begin with.
+
+## Ratios that exist in the export but produce nothing (2026-08-01 run)
+
+Thirteen ratios appear as top-level (directly selected) rows in all 121
+exports of the 2026-08-01 run and had no formula in the registry. They split
+in two, and **neither group can currently be exercised** — every one of them
+is blank in every period of all 121 exports, in the WEB pass *and* after a
+full Excel recalculation:
+
+- **Eight ship a real Excel formula** that evaluates to its `IFERROR(...,"-")`
+  fallback, because the inputs it references are themselves blank. Formulas
+  for these are now in the registry, transcribed character-for-character from
+  the `<f>` cell text rather than inferred from the input tree — reading the
+  formula text is the reliable move when a ratio has no values to fit
+  against. They are correct by transcription but **unexercised**: no PASS and
+  no FAIL, so treat them as untested code until an export actually populates
+  them. `Fixed Asset Turnover`, `Debt Payment Ratio`, `EV/EBITDA`,
+  `EV/Revenue`, `Return on Sales`, `Return on Invested Capital (ROIC)`,
+  `Operating Income`, `ROA Adjusted`.
+- **Five have no formula at all** — static, permanently empty rows (see the
+  Excel-behavior convention above: no formula means never computable).
+  Nothing to verify, so nothing was added. `Enterprise Value (EV)`,
+  `NOPAT`, `CFO Interest Coverage`, `Free Cash Flow to Firm (FCFF)`,
+  `Investing and Financing Coverage`.
+
+The second group poisons part of the first: `EV/EBITDA` and `EV/Revenue`
+divide by `Enterprise Value (EV)`, which is one of the permanently empty
+rows, so those two can never compute no matter what else is fixed.
+
+`Return on Sales` is a **confirmed false positive**, and a good illustration
+of the duplicate-row caveat above. It computes a value where the app shows
+`"-"`, so under the blank-is-a-FAIL rule below it now FAILs — 34 times across
+4 recalculated exports, the only thing that rule currently surfaces. It is
+not a product bug. The app's formula is `=IFERROR((E269/E270),"-")`, pointing
+at its own subtree rows, and in a recalculated export those read:
+
+```
+row  268  Return on Sales             sub=(top-level)       ['-', '-', '-', '-']
+row  269  Net Profit for the Period   sub=Return on Sales   ['-', '-', '-', '-']
+row  270  Total Revenue               sub=Return on Sales   ['-', '-', '-', '-']
+```
+
+The app has no inputs there and is right to show nothing. `load_metric_values`
+resolves those same two names to rows 175 and 30 — different, populated
+occurrences elsewhere in the sheet — so the check "computes" a ratio from
+numbers the app never fed into it.
+
+This is a real limitation of the first-occurrence loader, not of the new FAIL
+rule: **any** ratio whose subtree is empty while the same metric names appear
+populated elsewhere will produce the same false FAIL. Fixing it means
+resolving a formula's inputs within its own subtree (by row proximity or by
+`Subsection`) instead of globally by name. Until then, check `source_rows`
+before believing a blank-reported FAIL.
 
 ## Known bugs found via this tool (as of last investigation)
 
@@ -207,6 +275,14 @@ over too.
   bugs. Each formula returns `(None, None)` when it can't compute (missing
   inputs) rather than raising — `check_values()` treats that as "insufficient
   data to verify", not a failure.
+  `Net Borrowing` is the newest verified entry: `CFF - Proceeds from Loans` +
+  `CFF - Repayment of Loans`, checked against 121 exports (1210 periods
+  PASS, 0 FAIL, plus 31 PASS in the EXCEL pass). Repayment is negative in all
+  972 periods that report it, so the signed sum is the subtraction. Either
+  side may be absent on its own and counts as 0; only a period with neither
+  is left unverified.
+  The eight formulas in the "transcribed from the export's own Excel
+  formulas" block at the end are a different case — see below.
 - `check_values` — the actual compare-and-report loop, parameterized so it
   can run against either the WEB or EXCEL dataset. Also contains the
   "average vs current-balance" diagnostic heuristic (`RATIO_AVG_INPUT`) that

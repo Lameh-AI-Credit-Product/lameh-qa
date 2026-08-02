@@ -379,6 +379,20 @@ def formulas():
         return base + nb, note
     F["Free Cash Flow to Equity (FCFE)"] = fcfe
 
+    # Debt raised less debt repaid. Repayments are stored negative (see the
+    # sign convention above), so this is a signed sum like the rest of the FCF
+    # family - adding the negative achieves the subtraction. A period can
+    # legitimately have one side and not the other (all borrowing, or all
+    # repayment), so a missing side counts as 0 and only a period with neither
+    # is unverifiable.
+    def net_borrowing(values, i):
+        proceeds = g(values, "CFF - Proceeds from Loans", i)
+        repayment = g(values, "CFF - Repayment of Loans", i)
+        if proceeds is None and repayment is None:
+            return None, None
+        return (proceeds or 0.0) + (repayment or 0.0), None
+    F["Net Borrowing"] = net_borrowing
+
     def fcff(values, i):
         cfo = g(values, "Net Cash from Operating Activities (CFO)", i)
         capex = g(values, "CFI - Capital Expenditure (CapEx)", i, default_zero_if_missing=True)
@@ -601,6 +615,54 @@ def formulas():
             g(values, "Current Debt", i), g(values, "Non Current Debt", i))
     )
 
+    # --- Ratios transcribed from the export's own Excel formulas ---
+    # These ship with a formula but NO cached value at all (every period blank
+    # in a freshly downloaded file), so they produce a verdict only in the
+    # EXCEL pass - the WEB pass has nothing to compare against. Because of
+    # that, they were not inferred from their input trees: each one below is a
+    # direct transcription of the `<f>` formula text in the export, e.g.
+    #
+    #   Operating Income  =IFERROR((E472-ABS(E477)),"-")
+    #                     =IFERROR((Gross Profit-ABS(Total Operating Expenses)),"-")
+    #
+    # The IFERROR(..., "-") wrapper is the export's own "can't compute"
+    # fallback and corresponds to returning (None, None) here.
+    def quotient(numerator, denominator, abs_denominator=False):
+        def fn(values, i):
+            num = g(values, numerator, i)
+            den = g(values, denominator, i)
+            if None in (num, den):
+                return None, None
+            if abs_denominator:
+                den = abs(den)
+            if den == 0:
+                return None, None
+            return num / den, None
+        return fn
+
+    F["Fixed Asset Turnover"] = quotient("Total Revenue",
+                                         "Average PPE Net Book Value - Closing")
+    F["Debt Payment Ratio"] = quotient("Net Cash from Operating Activities (CFO)",
+                                       "CFF - Repayment of Loans", abs_denominator=True)
+    F["EV/EBITDA"] = quotient("Enterprise Value (EV)", "EBITDA")
+    F["EV/Revenue"] = quotient("Enterprise Value (EV)", "Total Revenue")
+    F["Return on Sales"] = quotient("Net Profit for the Period", "Total Revenue")
+    F["Return on Invested Capital (ROIC)"] = quotient("NOPAT", "Average Long Term Capital")
+
+    F["Operating Income"] = lambda values, i: (
+        (lambda gp, opex: (gp - abs(opex), None) if None not in (gp, opex) else (None, None))(
+            g(values, "Gross Profit", i), g(values, "Total Operating Expenses", i))
+    )
+    # The export writes the tax term as a literal `(1-0)` - the same "tax rate
+    # assumed zero" convention the older ROA Adjusted name spelled out - so
+    # this is Net Profit + Interest Expense, not a tax-effected add-back.
+    F["ROA Adjusted"] = lambda values, i: (
+        (lambda np_, interest, ta: ((np_ + interest * (1 - 0)) / ta, None)
+         if None not in (np_, interest, ta) and ta != 0 else (None, None))(
+            g(values, "Net Profit for the Period", i), g(values, "Interest Expense", i),
+            g(values, "Average Total Assets", i))
+    )
+
     return F
 
 
@@ -623,7 +685,14 @@ def check_values(xlsx_path, values, periods, source_rows, tolerance, csv_path, f
             if expected is None:
                 continue  # insufficient data to verify - not a failure
             if reported is None:
-                results.append((metric, period, "REPORTED-MISSING", reported, expected, None, note, source_row))
+                # Lameh shows nothing where the reported inputs do support a
+                # value. If that value is 0, blank and 0 read the same to a
+                # user and it isn't worth reporting. Anything else is a real
+                # disagreement between the export and its own inputs - the
+                # app is hiding a number it has the data to show - so it
+                # fails like any other mismatch.
+                status = "REPORTED-MISSING" if abs(expected) < ABS_EPS else "FAIL"
+                results.append((metric, period, status, reported, expected, None, note, source_row))
                 continue
             if abs(reported) < ABS_EPS and abs(expected) < ABS_EPS:
                 status = "PASS"
@@ -708,16 +777,19 @@ def check_values(xlsx_path, values, periods, source_rows, tolerance, csv_path, f
     print(f"Total (metric, period) checks performed: {total_checked}")
     print(f"  PASS: {len(results) - len(fails) - len(reported_missing)}")
     print(f"  FAIL: {len(fails)}")
-    print(f"  Reported value missing but computable: {len(reported_missing)}")
+    print(f"  Missing but computable as 0 (blank reads the same): {len(reported_missing)}")
     print(f"  Passed using a silently-zeroed missing input: {len(silent_zero)}")
     print("=" * 70)
 
     if fails:
         print("\nFAILURES (recomputed value does not match reported value):\n")
         for metric, period, status, reported, expected, diff_pct, note, source_row in fails:
-            dp = f"{diff_pct:.2%}" if diff_pct is not None else "n/a (reported=0)"
+            if diff_pct is not None:
+                dp = f"{diff_pct:.2%}"
+            else:
+                dp = "n/a (no reported value)" if reported is None else "n/a (reported=0)"
             print(f"  [{metric}] period={period} (Excel row {source_row})")
-            print(f"      reported = {reported}")
+            print(f"      reported = {reported if reported is not None else 'no value shown'}")
             print(f"      expected (using the properly-averaged/documented formula) = {expected}")
             print(f"      diff     = {dp}")
             diag = diagnosed.get((metric, period))
@@ -732,7 +804,8 @@ def check_values(xlsx_path, values, periods, source_rows, tolerance, csv_path, f
         print("\nNo failures found within tolerance.")
 
     if reported_missing:
-        print("\nCOMPUTABLE BUT NOT REPORTED (Lameh returned no value, but inputs exist):\n")
+        print("\nCOMPUTABLE AS ZERO BUT NOT REPORTED (blank and 0 look the same, so not a "
+              "failure - a non-zero computable value is reported as a FAIL above):\n")
         for metric, period, status, reported, expected, diff_pct, note, source_row in reported_missing:
             print(f"  [{metric}] period={period} (Excel row {source_row}) -> could compute {expected}, but Lameh shows no value")
 

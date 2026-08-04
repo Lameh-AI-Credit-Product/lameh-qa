@@ -192,6 +192,12 @@ def wait_ready(page):
 # isn't on the page, not that it's still loading. Skip it fast.
 ELEMENT_CLICK_TIMEOUT_MS = 1_000
 
+# Individual ratios are the tightest case: once their section is expanded the
+# whole list is in the DOM at once, so a ratio that isn't there after a beat
+# will never be. This runs ~120 times per company, so the budget is kept low -
+# it is the difference between seconds and minutes across a full run.
+RATIO_CLICK_TIMEOUT_MS = 200
+
 
 class NoMetricsFoundError(Exception):
     """Raised when the built analysis has no ratio metrics at all for this
@@ -204,7 +210,7 @@ def click_ratio_if_present(page, label, exact=False, logger=None):
     instead of failing the whole company over one missing metric."""
     locator = page.get_by_text(label, exact=exact)
     try:
-        locator.wait_for(state="visible", timeout=ELEMENT_CLICK_TIMEOUT_MS)
+        locator.wait_for(state="visible", timeout=RATIO_CLICK_TIMEOUT_MS)
         locator.click()
     except PlaywrightTimeoutError:
         if logger:

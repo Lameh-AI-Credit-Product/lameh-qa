@@ -870,11 +870,28 @@ def process_file(xlsx_path, tolerance, csv_base, fail_only, web_only):
         os.remove(recalculated_path)
 
 
-def default_csv_base(xlsx_path, date):
-    """Derive the default --csv base path for a single file: DEFAULT_CSV_DIR/<date>/<company>.csv"""
+def default_csv_base(xlsx_path, subfolder):
+    """Derive the default --csv base path for a single file: DEFAULT_CSV_DIR/<subfolder>/<company>.csv"""
     company = get_company_name(xlsx_path)
     filename = sanitize_filename(company) if company else "unknown-company"
-    return os.path.join(DEFAULT_CSV_DIR, date, f"{filename}.csv")
+    return os.path.join(DEFAULT_CSV_DIR, subfolder, f"{filename}.csv")
+
+
+def dir_subfolder(dir_path):
+    """Name a --dir batch's results folder after the input folder itself.
+
+    A download run already lives in a timestamped directory, so reusing that
+    name puts the batch's reports under the same label as the run they
+    describe, instead of under a second timestamp taken whenever the
+    verification happened to be run. Re-verifying a run also overwrites its
+    old reports rather than accumulating a new folder each time.
+
+    Falls back to a timestamp when there is no usable name to take - the
+    argument can be a trailing-slash path or a filesystem root, both of which
+    leave basename empty.
+    """
+    name = os.path.basename(os.path.normpath(dir_path))
+    return sanitize_filename(name) if name else datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
 
 def iter_xlsx_files(dir_path):
@@ -906,7 +923,8 @@ def main():
                           "<name>-web<ext> (cached export values) and <name>-excel<ext> "
                           "(values after a real Excel recalculation). Defaults to "
                           f"{DEFAULT_CSV_DIR}/<date>/<company name>. Not usable with --dir "
-                          "(each file gets its own default path).")
+                          f"(each file gets its own default path, under "
+                          f"{DEFAULT_CSV_DIR}/<name of the --dir folder>/).")
     ap.add_argument("--fail-only", action="store_true",
                      help="When writing --csv, include only non-PASS rows (FAIL / REPORTED-MISSING)")
     ap.add_argument("--web-only", action="store_true",
@@ -918,13 +936,13 @@ def main():
     if args.dir and args.csv:
         ap.error("--csv cannot be used with --dir; each file gets its own default CSV path")
 
-    date = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-
     if args.xlsx_path:
+        date = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         csv_base = args.csv or default_csv_base(args.xlsx_path, date)
         process_file(args.xlsx_path, args.tolerance, csv_base, args.fail_only, args.web_only)
         return
 
+    subfolder = dir_subfolder(args.dir)
     xlsx_files = list(iter_xlsx_files(args.dir))
     if not xlsx_files:
         print(f"No .xlsx files found in {args.dir}")
@@ -936,7 +954,7 @@ def main():
         print(f"# {xlsx_path}")
         print("#" * 70)
         try:
-            csv_base = default_csv_base(xlsx_path, date)
+            csv_base = default_csv_base(xlsx_path, subfolder)
             process_file(xlsx_path, args.tolerance, csv_base, args.fail_only, args.web_only)
             succeeded.append(xlsx_path)
         except Exception as e:

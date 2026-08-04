@@ -43,7 +43,11 @@ python sector_analysis_ratios.py path/to/export.xlsx [--tolerance 0.005] [--csv 
 - `--csv` — base path for CSV reports (see "Two-pass WEB vs EXCEL" below).
   If omitted, defaults to `results/sector-analysis/<date>/<company name>.csv`
   (date format `YYYY-MM-DD-HH-MM-SS`, company name read from the export
-  itself and sanitized for use as a filename).
+  itself and sanitized for use as a filename). Under `--dir` the `<date>`
+  segment is instead the name of the folder passed to `--dir`, so a batch's
+  reports land under the same name as the download run they describe rather
+  than under a second timestamp taken at verification time — and re-verifying
+  a run overwrites its previous reports instead of adding another folder.
 - `--fail-only` — when writing CSV, include only non-PASS rows.
 - `--web-only` — skip the Excel-recalculation pass (see below); use this on a
   machine without a local Excel installation.

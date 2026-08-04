@@ -63,7 +63,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-DOWNLOAD_SCRIPT = Path(__file__).with_name("sector_analysis_download_company_ratios.py")
+# Parsed, not imported (see selected_labels), so this is a file path rather
+# than a module reference and does not survive the download script moving.
+DOWNLOAD_SCRIPT = (Path(__file__).parent.parent
+                   / "E2E" / "sector_analysis_download_company_ratios.py")
 CLICK_FUNCTION = "click_ratio_if_present"
 
 SKIP_RE = re.compile(r"ratio not available, skipping: '(.*)'\s*$")
@@ -107,6 +110,10 @@ def selected_labels():
     working exactly as it does today, which is the point: it is expensive
     to re-run and shouldn't be disturbed by a reporting script.
     """
+    if not DOWNLOAD_SCRIPT.exists():
+        raise FileNotFoundError(
+            f"Cannot find the download script at {DOWNLOAD_SCRIPT}. The ratio labels are "
+            f"read out of its source, so this path has to track wherever it lives.")
     tree = ast.parse(DOWNLOAD_SCRIPT.read_text(encoding="utf-8"))
     known_lists = _literal_string_lists(tree)
 

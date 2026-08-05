@@ -24,6 +24,25 @@ Usage
     python tests/sector_analysis_audit.py
     python tests/sector_analysis_audit.py --run-dir data/sector-analysis/<ts>
     python tests/sector_analysis_audit.py --web-only
+    python tests/sector_analysis_audit.py --no-header
+
+The progress header
+-------------------
+Steps 1 and 2 run for tens of minutes and are chatty without being legible:
+neither tells you whether it is near the start or near the end, and the banner
+naming the running step scrolls off within seconds. So the terminal is split -
+a pinned four-line header carrying the step and a progress bar, and everything
+below it left for the step's own output (see utils/audit_display.py).
+
+Both bars are driven by watching the filesystem, not by parsing output: step 1
+counts the .xlsx files appearing in the run directory against the download's
+own COMPANIES list, and step 2 counts the CSV reports appearing against one
+(or two, without --web-only) per export. That keeps the child's stdout and
+stdin untouched, which step 1 requires - it asks for an OTP through input().
+
+--no-header turns the split off. The header also disables itself when stdout
+is not a terminal, when VT sequences can't be enabled, or when the window is
+too short to give the output room.
 
 --run-dir starts from step 2 against a run that has already been downloaded.
 Worth having its own flag rather than being a rerun of everything: step 1 takes
@@ -53,9 +72,19 @@ verification failed is exactly when you want to know what the download contained
 """
 
 import argparse
+import ast
+import shutil
 import subprocess
 import sys
+import time
+from contextlib import nullcontext
 from pathlib import Path
+
+# utils/ is a plain directory, not a package, so it is not importable from here
+# on its own - and this script is run by path (poe, python tests/...), so there
+# is no parent package to import it relative to either.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "utils"))
+from audit_display import Header, ProgressWatcher, progress_line  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data" / "sector-analysis"
@@ -68,28 +97,94 @@ COVERAGE_SCRIPT = REPO_ROOT / "tests" / "coverage" / "ratio_coverage.py"
 EMPTINESS_SCRIPT = REPO_ROOT / "tests" / "coverage" / "ratio_emptiness.py"
 
 
-def run_step(number, total, title, script, args):
+HEADER_HEIGHT = 4
+
+
+def header_lines(number, total, title, script, args, progress):
+    width = 78
+    return [
+        "=" * width,
+        f"STEP {number}/{total}: {title}",
+        f"  {progress}" if progress else
+        f"  {script.relative_to(REPO_ROOT)} {' '.join(str(a) for a in args)}",
+        "=" * width,
+    ]
+
+
+def run_step(number, total, title, script, args, header=None, progress=None, unit="items"):
     """Run one step with its streams attached to the terminal.
 
     Deliberately not captured. Step 1 asks for OTP on stdin, and the rest are
     long enough that watching them work is the difference between a run you
     can tell is progressing and one you have to guess about.
 
+    `progress` is an optional callable returning (done, total) for the header's
+    bar. It is polled, not pushed: it watches what the child leaves on disk, so
+    the child needs no cooperation and its output stays untouched.
+
     Uses sys.executable rather than shelling out to `poetry run poe`, so the
     audit runs in whatever interpreter invoked it - one process tree, no
     dependency on poe resolving, and no second virtualenv to get wrong.
     """
-    print(f"\n{'=' * 78}")
-    print(f"STEP {number}/{total}: {title}")
-    print(f"  {script.relative_to(REPO_ROOT)} {' '.join(str(a) for a in args)}")
-    print("=" * 78, flush=True)
+    started = time.monotonic()
 
-    completed = subprocess.run([sys.executable, str(script), *[str(a) for a in args]],
-                               cwd=REPO_ROOT)
+    def render():
+        line = None
+        if progress:
+            try:
+                done, expected = progress()
+                width = shutil.get_terminal_size().columns
+                line = progress_line(done, expected, unit, started, width - 4)
+            except Exception:
+                line = None
+        return header_lines(number, total, title, script, args, line)
+
+    banner = header_lines(number, total, title, script, args, None)
+    if header is None or not header.active:
+        print()
+        for line in banner:
+            print(line)
+        sys.stdout.flush()
+        completed = subprocess.run([sys.executable, str(script), *[str(a) for a in args]],
+                                   cwd=REPO_ROOT)
+    else:
+        with ProgressWatcher(header, render):
+            completed = subprocess.run([sys.executable, str(script), *[str(a) for a in args]],
+                                       cwd=REPO_ROOT)
+
     if completed.returncode != 0:
         print(f"\n!! STEP {number} FAILED (exit {completed.returncode}): {title}", flush=True)
         return False
     return True
+
+
+def company_count():
+    """How many companies the download will attempt, for the step 1 bar.
+
+    Read out of the download script's COMPANIES literal with `ast`, the same
+    way ratio_coverage reads its ratio labels and for the same reason:
+    importing that module opens a browser at module scope. Returns None if the
+    list can't be found, which draws an indeterminate bar rather than a wrong
+    one.
+    """
+    try:
+        tree = ast.parse(DOWNLOAD_SCRIPT.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "COMPANIES" for t in node.targets):
+            try:
+                return len(ast.literal_eval(node.value))
+            except (ValueError, TypeError, SyntaxError):
+                return None
+    return None
+
+
+def count_exports(directory):
+    if not directory or not directory.is_dir():
+        return 0
+    return len([p for p in directory.glob("*.xlsx") if not p.name.startswith("~$")])
 
 
 def snapshot_runs():
@@ -125,12 +220,23 @@ def main():
                              "pass, which needs a local Excel and roughly doubles step 2.")
     parser.add_argument("--tolerance", default=None,
                         help="Pass --tolerance through to the ratio check.")
+    parser.add_argument("--no-header", action="store_true",
+                        help="Don't pin a progress header to the top of the terminal; print "
+                             "each step's banner inline instead.")
     args = parser.parse_args()
 
     total = 4 if args.run_dir else 5
     step = 0
     done = {}
 
+    header = Header(HEADER_HEIGHT)
+    # nullcontext leaves header.active False, which is exactly what every
+    # caller checks - so --no-header needs no other branch anywhere.
+    with (nullcontext() if args.no_header else header):
+        return _run_audit(args, header, total, step, done)
+
+
+def _run_audit(args, header, total, step, done):
     if args.run_dir:
         run_dir = Path(args.run_dir).resolve()
         if not run_dir.is_dir():
@@ -140,7 +246,22 @@ def main():
     else:
         before = snapshot_runs()
         step += 1
-        done["download"] = run_step(step, total, "Download the exports", DOWNLOAD_SCRIPT, [])
+        # The run directory does not exist yet, so the bar's source has to be
+        # discovered while step 1 runs: the download creates it, then fills it
+        # one .xlsx at a time.
+        found = {}
+
+        def download_progress():
+            if "dir" not in found:
+                appeared = snapshot_runs() - before
+                if not appeared:
+                    return 0, company_count()
+                found["dir"] = max((DATA_DIR / n for n in appeared),
+                                   key=lambda p: p.stat().st_mtime)
+            return count_exports(found["dir"]), company_count()
+
+        done["download"] = run_step(step, total, "Download the exports", DOWNLOAD_SCRIPT, [],
+                                    header=header, progress=download_progress, unit="companies")
         run_dir = newest_new_run(before)
         if run_dir is None:
             print("\nThe download produced no new run directory under "
@@ -168,23 +289,37 @@ def main():
     if args.tolerance:
         ratio_args += ["--tolerance", args.tolerance]
 
+    # One report per export in --web-only, two otherwise (a -web.csv and an
+    # -excel.csv), so the bar tracks the Excel pass rather than sitting at
+    # 100% through the half of the step that takes the longest.
+    reports_expected = len(exports) * (1 if args.web_only else 2)
+
+    def ratio_progress():
+        if not results_dir.is_dir():
+            return 0, reports_expected
+        return len(list(results_dir.glob("*-web.csv"))) + \
+            len(list(results_dir.glob("*-excel.csv"))), reports_expected
+
     step += 1
-    done["ratios"] = run_step(step, total, "Verify every ratio", RATIOS_SCRIPT, ratio_args)
+    done["ratios"] = run_step(step, total, "Verify every ratio", RATIOS_SCRIPT, ratio_args,
+                              header=header, progress=ratio_progress, unit="reports")
 
     step += 1
     if done["ratios"] or results_dir.is_dir():
         done["summary"] = run_step(step, total, "Summarize the failures",
-                                   SUMMARY_SCRIPT, [results_dir])
+                                   SUMMARY_SCRIPT, [results_dir], header=header)
     else:
         done["summary"] = None
         print(f"\nSTEP {step}/{total} SKIPPED: the ratio check wrote no reports to "
               f"{results_dir}, so there is nothing to summarize.")
 
     step += 1
-    done["coverage"] = run_step(step, total, "Report ratio coverage", COVERAGE_SCRIPT, [run_dir])
+    done["coverage"] = run_step(step, total, "Report ratio coverage", COVERAGE_SCRIPT, [run_dir],
+                                header=header)
 
     step += 1
-    done["emptiness"] = run_step(step, total, "Report ratio emptiness", EMPTINESS_SCRIPT, [run_dir])
+    done["emptiness"] = run_step(step, total, "Report ratio emptiness", EMPTINESS_SCRIPT, [run_dir],
+                                 header=header)
 
     print(f"\n{'=' * 78}")
     print("AUDIT COMPLETE")

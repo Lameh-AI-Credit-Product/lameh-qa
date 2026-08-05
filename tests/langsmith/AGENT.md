@@ -25,7 +25,7 @@ calls. Useful flags on `langsmith-run`:
 
 - `--example-id materials-q1-cash-quality` — one prompt only, for a fast loop
 - `--max-concurrency N` — default 8 (= the dataset size); use 1 to serialize
-- `--agent-timeout SECONDS` — default 600; a prompt past it is cut off, scored
+- `--agent-timeout SECONDS` — default 900; a prompt past it is cut off, scored
   on the text that arrived, and fails `answer_coverage` as truncated
 - `--skip-report`
 

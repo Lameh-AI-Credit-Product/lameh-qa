@@ -34,7 +34,9 @@ DEFAULT_TIMEOUT_SECONDS = 120
 # Total wall-clock budget for one answer. A prompt still running past this is
 # treated as a non-answer: the connection is dropped and whatever text arrived
 # is returned marked timed_out, rather than holding the whole eval open.
-DEFAULT_DEADLINE_SECONDS = 600
+# Sector prompts already answer in 7-10 minutes, so 10 leaves nothing for a
+# slow day and turns ordinary variance into a truncation failure.
+DEFAULT_DEADLINE_SECONDS = 900
 
 
 def _headers():

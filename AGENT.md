@@ -1,21 +1,31 @@
 # Sector Analysis Ratio Verification — Agent Context
 
-> Scope note: this file covers `sector_analysis_ratios.py` only. The
-> LangSmith eval suite for the Intelligence agent is documented separately in
-> [`tests/langsmith/AGENT.md`](tests/langsmith/AGENT.md). The scripts under
-> `tests/E2E/` and `tests/coverage/` document themselves in their module
-> docstrings — read `tests/coverage/ratio_coverage.py`'s before changing how
-> it finds the download script's ratio labels, since it parses them out of
-> `tests/E2E/sector_analysis_download_company_ratios.py`'s source and so
-> depends on that file's path as well as its shape.
+> Scope note: this file covers `tests/integration/sector_analysis_ratios.py`
+> only — one step of a five-step pipeline. The others document themselves in
+> their module docstrings, which are the primary documentation for them:
+>
+> | | |
+> |---|---|
+> | `tests/sector_analysis_audit.py` | runs all five in order, passing each step's output to the next |
+> | `tests/E2E/sector_analysis_download_company_ratios.py` | step 1, the Playwright download |
+> | `tests/integration/summarize_ratio_failures.py` | step 3, one row per ratio across a run |
+> | `tests/coverage/ratio_coverage.py` | step 4, which companies were offered each ratio |
+> | `tests/coverage/ratio_emptiness.py` | step 5, which offered ratios ever held a number |
+> | `tests/utils/` | shared helpers — see [`tests/utils/AGENT.md`](tests/utils/AGENT.md) |
+>
+> Read `ratio_coverage.py`'s docstring before changing how it finds the
+> download script's ratio labels: it parses them out of the download script's
+> source, so it depends on that file's path as well as its shape.
+>
+> The LangSmith eval suite for the Intelligence agent is unrelated to all of
+> this and is documented in [`tests/langsmith/AGENT.md`](tests/langsmith/AGENT.md).
 
-This file documents `sector_analysis_ratios.py` for future agent sessions. In
-this repo it is a **standalone** file with no dependency on the rest of the
-codebase — it can be dropped into any Python environment with `openpyxl` (and
-optionally `pywin32` on Windows) and run on its own. It covers what the tool
-does, why it's built the way it is, the non-obvious things discovered
-empirically about Lameh's export format, and the conventions to follow when
-extending it.
+This file documents `sector_analysis_ratios.py` for future agent sessions. It
+is **standalone** — it imports nothing from the rest of the repo and can be
+dropped into any Python environment with `openpyxl` (and optionally `pywin32`
+on Windows) and run on its own. It covers what the tool does, why it's built
+the way it is, the non-obvious things discovered empirically about Lameh's
+export format, and the conventions to follow when extending it.
 
 ## Purpose
 
@@ -38,9 +48,13 @@ This is a **correctness check**, not a performance/timing test. It catches:
 ## Usage
 
 ```
-python sector_analysis_ratios.py path/to/export.xlsx [--tolerance 0.005] [--csv out.csv] [--fail-only] [--web-only]
+poetry run poe ratios path/to/export.xlsx [--tolerance 0.005] [--csv out.csv] [--fail-only] [--web-only]
+poetry run poe ratios --dir data/sector-analysis/<timestamp>/ [--fail-only] [--web-only]
 ```
 
+- `--dir` — verify every `.xlsx` directly under a directory instead of a
+  single file. One unreadable file is reported and skipped rather than
+  stopping the batch.
 - `--tolerance` — relative tolerance for a PASS (default 0.5%).
 - `--csv` — base path for CSV reports (see "Two-pass WEB vs EXCEL" below).
   If omitted, defaults to `results/sector-analysis/<date>/<company name>.csv`
@@ -98,8 +112,8 @@ something to report to the dev team as-is.
 
 The EXCEL pass requires `pywin32` and a local Excel installation — it will
 not work in CI or on non-Windows machines. Use `--web-only` to skip it there.
-When adding this to the main repo with Poetry: `poetry add pywin32 --platform
-win32` (the platform marker keeps it from being required on Linux/Mac CI).
+`pyproject.toml` already carries the dependency behind a
+`sys_platform == "win32"` marker, so it is not required on Linux/Mac CI.
 
 ## Duplicate metric rows — do not assume "first occurrence" is authoritative
 
@@ -192,40 +206,57 @@ path) has two fallbacks, because export layouts differ:
   fallback — not empty. A cell is only ever *truly*, permanently empty if it
   has no formula at all to begin with.
 
-## Ratios that exist in the export but produce nothing (2026-08-01 run)
+## Ratios the registry knows but no run has exercised
 
-Thirteen ratios appear as top-level (directly selected) rows in all 121
-exports of the 2026-08-01 run and had no formula in the registry. They split
-in two, and **neither group can currently be exercised** — every one of them
-is blank in every period of all 121 exports, in the WEB pass *and* after a
-full Excel recalculation:
+Thirteen ratios were originally added to the registry without ever producing
+a verdict: in the 2026-08-01 run they appeared as top-level rows in all 121
+exports but were blank in every period, in the WEB pass *and* after a full
+Excel recalculation. Eight of them ship a real Excel formula that falls
+through to its own `IFERROR(...,"-")`, and their registry entries were
+transcribed character-for-character from the `<f>` cell text rather than
+inferred from an input tree — reading the formula text is the reliable move
+when a ratio has no values to fit against. The other five had no formula at
+all: static rows, and per the Excel-behavior convention above, a cell with no
+formula is never computable.
 
-- **Eight ship a real Excel formula** that evaluates to its `IFERROR(...,"-")`
-  fallback, because the inputs it references are themselves blank. Formulas
-  for these are now in the registry, transcribed character-for-character from
-  the `<f>` cell text rather than inferred from the input tree — reading the
-  formula text is the reliable move when a ratio has no values to fit
-  against. They are correct by transcription but **unexercised**: no PASS and
-  no FAIL, so treat them as untested code until an export actually populates
-  them. `Fixed Asset Turnover`, `Debt Payment Ratio`, `EV/EBITDA`,
-  `EV/Revenue`, `Return on Sales`, `Return on Invested Capital (ROIC)`,
-  `Operating Income`, `ROA Adjusted`.
-- **Five have no formula at all** — static, permanently empty rows (see the
-  Excel-behavior convention above: no formula means never computable).
-  Nothing to verify, so nothing was added. `Enterprise Value (EV)`,
-  `NOPAT`, `CFO Interest Coverage`, `Free Cash Flow to Firm (FCFF)`,
-  `Investing and Financing Coverage`.
+**Since then the failure mode has changed and is now upstream of this
+script.** Across the three 2026-08-04/05 runs (dev 121, uat 57, core 94
+companies), ten of the thirteen are no longer *offered*: the download logs
+"ratio not available, skipping" for every company, so they score 0% in
+`_ratio-coverage.csv` and never reach the export at all. They are gone from
+the picker under the names we ask for, not blank within it:
 
-The second group poisons part of the first: `EV/EBITDA` and `EV/Revenue`
-divide by `Enterprise Value (EV)`, which is one of the permanently empty
-rows, so those two can never compute no matter what else is fixed.
+`Enterprise Value (EV)`, `EV/EBITDA`, `EV/Revenue`, `Fixed Asset Turnover`,
+`Return on Sales`, `Return on Invested Capital (ROIC)`, `Operating Income`,
+`CFO Interest Coverage`, `Free Cash Flow to Firm (FCFF)`,
+`Investing and Financing Coverage`.
 
-`Return on Sales` is a **confirmed false positive**, and a good illustration
-of the duplicate-row caveat above. It computes a value where the app shows
-`"-"`, so under the blank-is-a-FAIL rule below it now FAILs — 34 times across
-4 recalculated exports, the only thing that rule currently surfaces. It is
-not a product bug. The app's formula is `=IFERROR((E269/E270),"-")`, pointing
-at its own subtree rows, and in a recalculated export those read:
+Three have started producing values, so the "unexercised" label no longer
+applies to them:
+
+| Ratio | Where | Result |
+|---|---|---|
+| `Debt Payment Ratio` | dev and uat, 100% coverage (0% in core) | 1 WEB fail in dev, none in uat — the transcription holds up |
+| `ROA Adjusted` | core only, 94/94, POPULATED | 27 WEB / 122 EXCEL fails — the second-largest failure in core |
+| `NOPAT` | core only, 91/94, POPULATED | 10 WEB fails |
+
+The last two arrive under core's older labels, `ROA Adjusted (Tax Rate
+Assumed Zero)` and `NOPAT (Tax Rate Assumed Zero)`; the registry carries both
+spellings, and `NOPAT`'s formula was added when core started populating it.
+The download clicks by visible-text prefix, which is why asking for `NOPAT`
+matches the longer name.
+
+`EV/EBITDA` and `EV/Revenue` remain unfixable from this side regardless:
+both divide by `Enterprise Value (EV)`, which is itself in the missing ten.
+
+### The duplicate-row false positive to watch for
+
+`Return on Sales` was a confirmed false positive while it still exported, and
+is the clearest illustration of the duplicate-row caveat above. It computed a
+value where the app showed `"-"`, so under the blank-is-a-FAIL rule it FAILed
+— 34 times across 4 recalculated exports. It was not a product bug. The app's
+formula is `=IFERROR((E269/E270),"-")`, pointing at its own subtree rows,
+which in a recalculated export read:
 
 ```
 row  268  Return on Sales             sub=(top-level)       ['-', '-', '-', '-']
@@ -238,31 +269,47 @@ resolves those same two names to rows 175 and 30 — different, populated
 occurrences elsewhere in the sheet — so the check "computes" a ratio from
 numbers the app never fed into it.
 
-This is a real limitation of the first-occurrence loader, not of the new FAIL
-rule: **any** ratio whose subtree is empty while the same metric names appear
-populated elsewhere will produce the same false FAIL. Fixing it means
-resolving a formula's inputs within its own subtree (by row proximity or by
-`Subsection`) instead of globally by name. Until then, check `source_rows`
-before believing a blank-reported FAIL.
+The ratio dropping out of the export retired that particular FAIL, but not
+the limitation behind it, which belongs to the first-occurrence loader rather
+than to the FAIL rule: **any** ratio whose subtree is empty while the same
+metric names appear populated elsewhere will produce the same false FAIL.
+Fixing it means resolving a formula's inputs within its own subtree (by row
+proximity or by `Subsection`) instead of globally by name. Until then, check
+`source_rows` before believing a blank-reported FAIL.
 
-## Known bugs found via this tool (as of last investigation)
+## Known bugs found via this tool
 
 These survived a full Excel recalculation (i.e. they are NOT caching
 artifacts — the formula itself disagrees with the correct, documented
-calculation):
+calculation). Counts below are `WEB / EXCEL` fails from the three
+2026-08-04/05 runs (dev 121 companies, uat 57, core 94), read off each run's
+`_summary.csv`; `—` means the ratio isn't exported in that environment.
 
-- Free Cash Flow to Equity (FCFE)
-- Retention Ratio
-- ROE (DuPont 3-Factor) and ROE (DuPont 5-Factor)
-- Net Debt to EBITDA
+| Ratio | dev | uat | core |
+|---|---|---|---|
+| Free Cash Flow to Equity (FCFE) | 20 / 84 | 55 / 106 | 7 / 807 |
+| Financial Leverage | 5 / 5 | 17 / 17 | 31 / 30 |
+| ROE (DuPont 3-Factor) | 0 / 0 | 17 / 17 | 22 / 25 |
+| ROE (DuPont 5-Factor) | 0 / 0 | 17 / 17 | 22 / 25 |
+| Net Debt | 182 / 182 | — | 7 / 7 |
+| Net Debt to EBITDA | 151 / 151 | — | 8 / 6 |
+| Retention Ratio | 0 / 0 | — | 10 / 10 |
+| Net Borrowing | 0 / 86 | 0 / 42 | 50 / 50 |
+
+Two shapes in that table are worth reading deliberately:
+
+- **`0 / N`** — every cached value passes and the recalculated value fails.
+  The number the app displays is masking a formula that is wrong underneath.
+  `Net Borrowing` in dev and uat is the clean example; `FCFE` in core is the
+  severe one (7 cached fails against 807 recalculated).
+- **`N / 0`** — fails in the cache, passes after recalculation. A stale cache
+  in the export pipeline rather than a formula bug, though the stale number is
+  still what a user sees. Most of core's margin family and the
+  return-on-assets group sit here.
 
 Plus the duplicate-row inconsistency for `Inventory Turnover` described
 above (and potentially other metrics with the same "standalone vs
 decomposition-input duplicate" pattern — not exhaustively audited).
-
-See `BUG_REPORT_ratio_export.md` (in the sandbox this file was written
-alongside) for the full writeup intended for the dev team, if it was copied
-over too.
 
 ## Code structure (for extending the script)
 
@@ -281,14 +328,16 @@ over too.
   bugs. Each formula returns `(None, None)` when it can't compute (missing
   inputs) rather than raising — `check_values()` treats that as "insufficient
   data to verify", not a failure.
-  `Net Borrowing` is the newest verified entry: `CFF - Proceeds from Loans` +
-  `CFF - Repayment of Loans`, checked against 121 exports (1210 periods
-  PASS, 0 FAIL, plus 31 PASS in the EXCEL pass). Repayment is negative in all
-  972 periods that report it, so the signed sum is the subtraction. Either
-  side may be absent on its own and counts as 0; only a period with neither
-  is left unverified.
+  `Net Borrowing` is `CFF - Proceeds from Loans` + `CFF - Repayment of
+  Loans`. Repayment is negative in all 972 periods of the 2026-08-01 run that
+  report it, so the signed sum is the subtraction. Either side may be absent
+  on its own and counts as 0; only a period with neither is left unverified.
+  It passed cleanly on that run (1210 periods PASS, 0 FAIL) but has failed in
+  all three runs since — see the table above, and note the `0 / N` shape in
+  dev and uat.
   The eight formulas in the "transcribed from the export's own Excel
-  formulas" block at the end are a different case — see below.
+  formulas" block at the end are a different case — see "Ratios the registry
+  knows but no run has exercised" above.
 - `check_values` — the actual compare-and-report loop, parameterized so it
   can run against either the WEB or EXCEL dataset. Also contains the
   "average vs current-balance" diagnostic heuristic (`RATIO_AVG_INPUT`) that

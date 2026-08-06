@@ -10,13 +10,23 @@ A failure on one company is logged and does not stop the run - the loop
 moves on to the next company. See the run's log file (same folder as
 the downloads) for anything that went wrong.
 
+The company list comes from `uploaded_companies()` (see
+`tests/utils/lameh_roster.py`): every company the system has financials for,
+asked for at the start of each run. It used to be a literal list here, which
+had drifted ten companies behind by the time it was replaced.
+
+Downloads are named `<ticker>_<company>.xlsx`. The ticker comes from the
+roster; runs from before it did carry an internal id instead, so filenames
+across the two are not comparable (nothing reads them - the verification
+scripts take the company name from inside the workbook).
+
 Usage
 -----
     poetry run poe download-ratios
 
-Edit COMPANIES below with the list to run. Each entry is used as the
-search term, and "Select all companies in <results>" is clicked - so make
-each entry specific enough to match exactly one company.
+Each company's name is used as the search term, and "Select all companies in
+<results>" is clicked, so the name has to match exactly one company - the
+roster's full English names do.
 """
 
 import logging
@@ -29,140 +39,15 @@ from pathlib import Path
 from dotenv import load_dotenv
 from playwright.sync_api import Playwright, sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+# utils/ is a plain directory rather than a package, and this script is run by
+# path, so there is no parent package to import it relative to either.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "utils"))
+from lameh_roster import uploaded_companies  # noqa: E402
+
 load_dotenv()
 
 BASE_URL = os.environ["BASE_URL"]
 LOGIN_URL = f"{BASE_URL}/login"
-
-# Edit this list with the companies to run in this batch. `name` is used as
-# the search term (full name, so the search narrows to a single match);
-# `company_id` is only used to make the downloaded filename unique/traceable.
-# Filtered from the sector export to companies with type == "public" and
-# uploaded == true; `name` is name_en, falling back to name_ar where no
-# English name was recorded.
-COMPANIES = [
-    {"company_id": 3518, "name": "Alwasail Industrial Co."},
-    {"company_id": 3535, "name": "Anmat Technology for Trading Co."},
-    {"company_id": 3536, "name": "Arabian United Float  Glass Co."},
-    {"company_id": 3575, "name": "Electrical Industries Co."},
-    {"company_id": 3560, "name": "Gas Arabian Services Co."},
-    {"company_id": 3717, "name": "United Mining Industries Co."},
-    {"company_id": 3748, "name": "Al Mawarid Manpower Co."},
-    {"company_id": 3541, "name": "Baazeem Trading Co."},
-    {"company_id": 3577, "name": "Alfakhera for Mens Tailoring Co."},
-    {"company_id": 3590, "name": "Fitaihi Holding Group"},
-    {"company_id": 3657, "name": "Americana Restaurants International PLC - Foreign Company"},
-    {"company_id": 3597, "name": "Armah Sports Co."},
-    {"company_id": 3672, "name": "Herfy Food Services Co."},
-    {"company_id": 3596, "name": "Leejam Sports Co."},
-    {"company_id": 3559, "name": "National Company for Learning and Education"},
-    {"company_id": 3533, "name": "Ratio Speciality Company for Trading"},
-    {"company_id": 3747, "name": "Shatirah House Restaurant Co."},
-    {"company_id": 3631, "name": "BinDawood Holding Co."},
-    {"company_id": 3595, "name": "Nahdi Medical Co."},
-    {"company_id": 3552, "name": "Nayifat Finance Co."},
-    {"company_id": 3555, "name": "Almarai Co."},
-    {"company_id": 3635, "name": "First Milling Co."},
-    {"company_id": 3662, "name": "Al Hammadi Holding"},
-    {"company_id": 3572, "name": "Al-Modawat Specialized Medical Co."},
-    {"company_id": 3583, "name": "Al-Razi Medical Co."},
-    {"company_id": 3654, "name": "Arabian International Healthcare Holding Co."},
-    {"company_id": 3519, "name": "Canadian Medical Center Co."},
-    {"company_id": 3668, "name": "Dallah Healthcare Co."},
-    {"company_id": 3674, "name": "Dr. Sulaiman Al Habib Medical Services Group"},
-    {"company_id": 3588, "name": "Lana Medical Co."},
-    {"company_id": 3663, "name": "Middle East Healthcare Co."},
-    {"company_id": 3666, "name": "Mouwasat Medical Services Co."},
-    {"company_id": 3538, "name": "MOBI Industry Co."},
-    {"company_id": 3539, "name": "Mutakamela Insurance Co."},
-    {"company_id": 3738, "name": "ASG Plastic Factory Co."},
-    {"company_id": 3727, "name": "Advanced Building Industries Co."},
-    {"company_id": 3684, "name": "Advanced Petrochemical Co."},
-    {"company_id": 3689, "name": "Al Jouf Cement Co."},
-    {"company_id": 3715, "name": "Al Kathiri Holding Co."},
-    {"company_id": 3556, "name": "Al Rashid Industrial Co."},
-    {"company_id": 3640, "name": "Al Taiseer Group Talco Industrial Co."},
-    {"company_id": 3719, "name": "Al Yamamah Steel Industries Co."},
-    {"company_id": 3735, "name": "Albattal Factory for Chemical Industries Co."},
-    {"company_id": 3665, "name": "Almasane Alkobra Mining Co."},
-    {"company_id": 3716, "name": "Alujain Corp."},
-    {"company_id": 3734, "name": "Aqaseem Factory for Chemicals and Plastics Co."},
-    {"company_id": 3704, "name": "Arabian Cement Co."},
-    {"company_id": 3682, "name": "Arabian Pipes Co."},
-    {"company_id": 3728, "name": "Arabian Plastic Industrial Co."},
-    {"company_id": 3713, "name": "Basic Chemical Industries Co."},
-    {"company_id": 3720, "name": "Bena Steel Industries Co."},
-    {"company_id": 3656, "name": "City Cement Co."},
-    {"company_id": 3701, "name": "East Pipes Integrated Company for Industry"},
-    {"company_id": 3694, "name": "Eastern Province Cement Co."},
-    {"company_id": 3721, "name": "Filing and Packing Materials Manufacturing Co."},
-    {"company_id": 3723, "name": "Group Five Pipe Saudi Co."},
-    {"company_id": 3737, "name": "Marble Design Co."},
-    {"company_id": 3731, "name": "Methanol Chemicals Co."},
-    {"company_id": 3739, "name": "Meyar Co."},
-    {"company_id": 3710, "name": "Middle East Paper Co."},
-    {"company_id": 3733, "name": "Mohammed Hadi Al Rasheed and Partners Co."},
-    {"company_id": 3687, "name": "Mohammed Hasan AlNaqool Sons Co."},
-    {"company_id": 3740, "name": "Molan Steel Co."},
-    {"company_id": 3736, "name": "Naas Petrol Factory Co."},
-    {"company_id": 3699, "name": "Najran Cement Co."},
-    {"company_id": 3743, "name": "Nama Chemicals Co."},
-    {"company_id": 3661, "name": "National Gypsum Co."},
-    {"company_id": 3659, "name": "National Industrialization Co."},
-    {"company_id": 3685, "name": "National Metal Manufacturing and Casting Co."},
-    {"company_id": 3742, "name": "Neft Alsharq Company for Chemical Industries"},
-    {"company_id": 3695, "name": "Northern Region Cement Co."},
-    {"company_id": 3741, "name": "Paper Home Co."},
-    {"company_id": 3691, "name": "Qassim Cement Co."},
-    {"company_id": 3690, "name": "Riyadh Cement Co."},
-    {"company_id": 3709, "name": "Riyadh Steel Co."},
-    {"company_id": 3676, "name": "SABIC Agri-Nutrients Co."},
-    {"company_id": 3532, "name": "Sahara International Petrochemical Co."},
-    {"company_id": 3726, "name": "Saleh Abdulaziz Al Rashed and Sons Co."},
-    {"company_id": 3660, "name": "Saudi Arabian Mining Co."},
-    {"company_id": 3655, "name": "Saudi Aramco Base Oil Co."},
-    {"company_id": 3675, "name": "Saudi Basic Industries Corp."},
-    {"company_id": 3703, "name": "Saudi Cement Co."},
-    {"company_id": 3686, "name": "Saudi Industrial Investment Group"},
-    {"company_id": 3730, "name": "Saudi Kayan Petrochemical Co."},
-    {"company_id": 3681, "name": "Saudi Lime Industries Co."},
-    {"company_id": 3653, "name": "Saudi Paper Manufacturing Co."},
-    {"company_id": 3677, "name": "Saudi Steel Pipe Co."},
-    {"company_id": 3729, "name": "Saudi Top for Trading Co."},
-    {"company_id": 3652, "name": "Saudi Vitrified Clay Pipes Co."},
-    {"company_id": 3693, "name": "Southern Province Cement Co."},
-    {"company_id": 3698, "name": "Tabuk Cement Co."},
-    {"company_id": 3722, "name": "Takween Advanced Industries Co."},
-    {"company_id": 3714, "name": "Taqat Mineral Trading Co."},
-    {"company_id": 3664, "name": "The National Company for Glass Industries"},
-    {"company_id": 3697, "name": "Umm Al-Qura Cement Co."},
-    {"company_id": 3683, "name": "United Carton Industries Co."},
-    {"company_id": 3658, "name": "United Wire Factories Co."},
-    {"company_id": 3673, "name": "Watani Iron Steel Co."},
-    {"company_id": 3696, "name": "Yamama Cement Co."},
-    {"company_id": 3700, "name": "Yanbu Cement Co."},
-    {"company_id": 3746, "name": "Yanbu National Petrochemical Co."},
-    {"company_id": 3724, "name": "Zahrat Al Waha for Trading Co."},
-    {"company_id": 3587, "name": "Time Entertainment Co."},
-    {"company_id": 3649, "name": "Jamjoom Pharmaceuticals Factory Co."},
-    {"company_id": 3650, "name": "Middle East Pharmaceutical Industries Co."},
-    {"company_id": 3651, "name": "Saudi Pharmaceutical Industries and Medical Appliances Corp."},
-    {"company_id": 3551, "name": "Alramz Real Estate Co."},
-    {"company_id": 3639, "name": "Arriyadh Development Co."},
-    {"company_id": 3608, "name": "Banan Real Estate Co."},
-    {"company_id": 3537, "name": "Dar Al Majed Real Estate Co."},
-    {"company_id": 3636, "name": "First Avenue for Real Estate Development Co."},
-    {"company_id": 3542, "name": "Jabal Omar Development Co."},
-    {"company_id": 3645, "name": "Ladun Investment Co."},
-    {"company_id": 3648, "name": "Retal Urban Development Co."},
-    {"company_id": 3578, "name": "Saudi Real Estate Co."},
-    {"company_id": 3589, "name": "Advance International Company for Communication and Information Technology"},
-    {"company_id": 3573, "name": "Al Moammar Information Systems Co."},
-    {"company_id": 3582, "name": "Etihad GO Telecom Co."},
-    {"company_id": 3571, "name": "Khaled Dhafer and Brothers for Logistics Services Co."},
-    {"company_id": 3581, "name": "Saudi Ground Services Co."},
-    {"company_id": 3586, "name": "Natural Gas Distribution Co."},
-]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_DIR = REPO_ROOT / "data" / "sector-analysis" / datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -405,6 +290,8 @@ def run(playwright: Playwright, companies: list[dict]) -> None:
     context.close()
     browser.close()
 
+
+COMPANIES = uploaded_companies()
 
 with sync_playwright() as playwright:
     run(playwright, COMPANIES)

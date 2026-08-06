@@ -35,8 +35,8 @@ a pinned four-line header carrying the step and a progress bar, and everything
 below it left for the step's own output (see utils/audit_display.py).
 
 Both bars are driven by watching the filesystem, not by parsing output: step 1
-counts the .xlsx files appearing in the run directory against the download's
-own COMPANIES list, and step 2 counts the CSV reports appearing against one
+counts the .xlsx files appearing in the run directory against the live company
+roster the download works from, and step 2 counts the CSV reports against one
 (or two, without --web-only) per export. That keeps the child's stdout and
 stdin untouched, which step 1 requires - it asks for an OTP through input().
 
@@ -72,7 +72,6 @@ verification failed is exactly when you want to know what the download contained
 """
 
 import argparse
-import ast
 import shutil
 import subprocess
 import sys
@@ -85,6 +84,7 @@ from pathlib import Path
 # is no parent package to import it relative to either.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "utils"))
 from audit_display import Header, ProgressWatcher, progress_line  # noqa: E402
+from lameh_roster import uploaded_companies  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data" / "sector-analysis"
@@ -158,27 +158,27 @@ def run_step(number, total, title, script, args, header=None, progress=None, uni
     return True
 
 
+_company_count = {}
+
+
 def company_count():
     """How many companies the download will attempt, for the step 1 bar.
 
-    Read out of the download script's COMPANIES literal with `ast`, the same
-    way ratio_coverage reads its ratio labels and for the same reason:
-    importing that module opens a browser at module scope. Returns None if the
-    list can't be found, which draws an indeterminate bar rather than a wrong
-    one.
+    Asks the same roster the download script works from, so the bar's
+    denominator is the run's actual size rather than a number transcribed from
+    somewhere. Cached: the progress watcher calls this once a second, and the
+    roster does not change during a run.
+
+    Returns None if the roster can't be reached, which draws an indeterminate
+    bar rather than a wrong one - the download is the thing being watched here,
+    and it has its own copy of the list, so a failure to count is cosmetic.
     """
-    try:
-        tree = ast.parse(DOWNLOAD_SCRIPT.read_text(encoding="utf-8"))
-    except OSError:
-        return None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and any(
-                isinstance(t, ast.Name) and t.id == "COMPANIES" for t in node.targets):
-            try:
-                return len(ast.literal_eval(node.value))
-            except (ValueError, TypeError, SyntaxError):
-                return None
-    return None
+    if "n" not in _company_count:
+        try:
+            _company_count["n"] = len(uploaded_companies())
+        except Exception:
+            _company_count["n"] = None
+    return _company_count["n"]
 
 
 def count_exports(directory):

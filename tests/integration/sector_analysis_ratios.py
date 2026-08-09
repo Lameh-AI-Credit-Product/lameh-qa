@@ -70,6 +70,29 @@ TOLERANCE_DEFAULT = 0.005  # 0.5% relative tolerance
 ABS_EPS = 1e-6              # absolute epsilon for near-zero comparisons
 DEFAULT_CSV_DIR = os.path.join("results", "sector-analysis")
 
+VALID_ENVS = ("DEV", "UAT", "CORE")
+
+
+def run_env():
+    """The deployment label ($ENV: DEV/UAT/CORE) used to prefix a single file's
+    default results folder, or None when it isn't set to one of those.
+
+    Unlike the download script this does not insist on it. A --dir batch takes
+    its folder name from the run directory it was given, which already carries
+    the label, so ENV only affects the single-file case - and refusing to
+    verify one exported workbook because an unrelated variable is unset would
+    cost more than the label is worth. This script is also meant to stay
+    droppable into a bare environment (see the module docstring), which is why
+    .env is read only if python-dotenv happens to be installed.
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+    value = (os.environ.get("ENV") or "").strip().upper()
+    return value if value in VALID_ENVS else None
+
 
 def is_num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
@@ -937,8 +960,12 @@ def main():
         ap.error("--csv cannot be used with --dir; each file gets its own default CSV path")
 
     if args.xlsx_path:
-        date = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        csv_base = args.csv or default_csv_base(args.xlsx_path, date)
+        # Same <ENV>-<timestamp> shape the download gives its run folders, so a
+        # one-off verification files itself the way a batch of them would.
+        stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        env = run_env()
+        csv_base = args.csv or default_csv_base(args.xlsx_path,
+                                                f"{env}-{stamp}" if env else stamp)
         process_file(args.xlsx_path, args.tolerance, csv_base, args.fail_only, args.web_only)
         return
 

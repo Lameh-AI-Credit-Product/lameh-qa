@@ -4,7 +4,14 @@ Sector Analysis - bulk ratio-export download (E2E, Playwright)
 Logs in once (you complete OTP by hand), then loops over a list of
 companies without closing the browser, building a "select all ratios"
 Sector Analysis and downloading the Excel export for each one into
-`data/sector-analysis/<run timestamp>/`.
+`data/sector-analysis/<ENV>-<run timestamp>/`.
+
+`ENV` (DEV, UAT or CORE) comes from the environment and labels the run
+folder, because the three deployments export different ratio sets and a
+folder named by timestamp alone gives no way to tell which one produced it
+months later. It is required and validated here rather than defaulted: a run
+mislabelled as the wrong environment is worse than one that refuses to start,
+since every downstream report inherits this folder's name.
 
 A failure on one company is logged and does not stop the run - the loop
 moves on to the next company. See the run's log file (same folder as
@@ -49,8 +56,24 @@ load_dotenv()
 BASE_URL = os.environ["BASE_URL"]
 LOGIN_URL = f"{BASE_URL}/login"
 
+VALID_ENVS = ("DEV", "UAT", "CORE")
+
+
+def run_env() -> str:
+    """The deployment label for this run, from $ENV. Required, and one of
+    VALID_ENVS - see the module docstring for why it is not defaulted."""
+    value = (os.environ.get("ENV") or "").strip().upper()
+    if value not in VALID_ENVS:
+        raise SystemExit(
+            f"ENV must be one of {', '.join(VALID_ENVS)} (got {os.environ.get('ENV')!r}).\n"
+            f"Set it in .env alongside BASE_URL, so the run folder records which "
+            f"deployment these exports came from.")
+    return value
+
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUN_DIR = REPO_ROOT / "data" / "sector-analysis" / datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+RUN_DIR = (REPO_ROOT / "data" / "sector-analysis"
+           / f"{run_env()}-{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}")
 
 NAV_TIMEOUT_MS = 30_000
 BUILD_TIMEOUT_MS = 180_000  # ratio-set generation / data fetch can take up to ~3 minutes

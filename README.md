@@ -30,11 +30,13 @@ For the E2E script, Playwright also needs its browser binaries installed once:
 poetry run playwright install chromium
 ```
 
-The E2E script, and the LangSmith eval suite, read their configuration (`BASE_URL`, LangSmith credentials, orchestrator/chart-data credentials, AWS Bedrock credentials for the LLM judge) from a `.env` file (gitignored, not committed). Copy `.env.example` to `.env` and fill in the real values:
+The E2E script, and the LangSmith eval suite, read their configuration (`BASE_URL`, `ENV`, LangSmith credentials, orchestrator/chart-data credentials, AWS Bedrock credentials for the LLM judge) from a `.env` file (gitignored, not committed). Copy `.env.example` to `.env` and fill in the real values:
 
 ```
 cp .env.example .env
 ```
+
+`ENV` must be `DEV`, `UAT` or `CORE`, matching the deployment `BASE_URL` points at. It labels the Sector Analysis run folder (`data/sector-analysis/<ENV>-<timestamp>/`) and, through it, every report derived from that run — the three deployments export different ratio sets, so a run you can't attribute to one of them is hard to read later. The download refuses to start without it. Nothing checks it against `BASE_URL`, so keep the two in step by hand.
 
 ## Usage
 

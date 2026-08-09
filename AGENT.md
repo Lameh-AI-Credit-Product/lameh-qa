@@ -49,7 +49,7 @@ This is a **correctness check**, not a performance/timing test. It catches:
 
 ```
 poetry run poe ratios path/to/export.xlsx [--tolerance 0.005] [--csv out.csv] [--fail-only] [--web-only]
-poetry run poe ratios --dir data/sector-analysis/<timestamp>/ [--fail-only] [--web-only]
+poetry run poe ratios --dir data/sector-analysis/<ENV>-<timestamp>/ [--fail-only] [--web-only]
 ```
 
 - `--dir` — verify every `.xlsx` directly under a directory instead of a
@@ -57,9 +57,10 @@ poetry run poe ratios --dir data/sector-analysis/<timestamp>/ [--fail-only] [--w
   stopping the batch.
 - `--tolerance` — relative tolerance for a PASS (default 0.5%).
 - `--csv` — base path for CSV reports (see "Two-pass WEB vs EXCEL" below).
-  If omitted, defaults to `results/sector-analysis/<date>/<company name>.csv`
-  (date format `YYYY-MM-DD-HH-MM-SS`, company name read from the export
-  itself and sanitized for use as a filename). Under `--dir` the `<date>`
+  If omitted, defaults to `results/sector-analysis/<ENV>-<date>/<company
+  name>.csv` (date format `YYYY-MM-DD-HH-MM-SS`, company name read from the
+  export itself and sanitized for use as a filename; `<ENV>-` is dropped when
+  `$ENV` is unset — see "The ENV label" below). Under `--dir` the whole
   segment is instead the name of the folder passed to `--dir`, so a batch's
   reports land under the same name as the download run they describe rather
   than under a second timestamp taken at verification time — and re-verifying
@@ -67,6 +68,39 @@ poetry run poe ratios --dir data/sector-analysis/<timestamp>/ [--fail-only] [--w
 - `--fail-only` — when writing CSV, include only non-PASS rows.
 - `--web-only` — skip the Excel-recalculation pass (see below); use this on a
   machine without a local Excel installation.
+
+## The ENV label
+
+`$ENV` (`DEV`, `UAT` or `CORE`, read from `.env`) names the deployment a run
+came from. The three export materially different ratio sets — the tables below
+are split by environment for exactly that reason — and a folder named by
+timestamp alone gives no way to tell them apart later.
+
+It is applied in one place and inherited everywhere else:
+
+- The download (step 1) writes to `data/sector-analysis/<ENV>-<timestamp>/`.
+  It **requires** `$ENV` and refuses to start without a valid one. A run
+  mislabelled as the wrong environment is worse than one that doesn't start,
+  since every downstream report takes this folder's name.
+- Steps 2–5 all take that directory as `--dir` and name their output after it,
+  so they need no knowledge of `$ENV` at all. This is the same inheritance
+  that already made a batch's reports land under the run's own name.
+- `sector_analysis_ratios.py` reads `$ENV` **only** for the single-file case,
+  which invents its own timestamp and would otherwise be the one unlabelled
+  output. It does not require it: refusing to verify one workbook because an
+  unrelated variable is unset costs more than the label is worth, so an unset
+  or unrecognized `$ENV` just falls back to a bare timestamp. Values are
+  upper-cased and stripped, so `uat` and ` Core ` work.
+
+Nothing cross-checks `$ENV` against `BASE_URL` — they are two independent
+strings in `.env`, and pointing `BASE_URL` at uat while `ENV=DEV` will happily
+produce a folder full of uat exports labelled `DEV-`. Keep them in step by
+hand.
+
+Reading `.env` in `sector_analysis_ratios.py` is done behind a
+`try: from dotenv import load_dotenv / except ImportError: pass`, deliberately:
+this file is documented above as standalone and droppable into any environment
+with `openpyxl`, and a hard `python-dotenv` import would end that.
 
 (In the sandbox this was developed in, there was also a separate
 `extract_fails.py` utility that extracted non-PASS rows from a CSV after the

@@ -174,17 +174,15 @@ def select_all_ratios(page, logger=None):
         "Fixed Asset Turnover", "Inventory Turnover", "Payables Turnover",
         "Receivables Turnover", "Total Assets Turnover",
         "Working Capital Turnover",
-        "Book Value of Equity", "CFO Interest Coverage", "Debt Coverage",
+        "Book Value of Equity", "Debt Coverage",
         "Debt Payment Ratio", "Dividend Payment Coverage", "EBITDA Coverage",
-        "OCF Debt Service Ratio (OCF", "Investing and Financing",
+        "OCF Debt Service Ratio (OCF",
         "Operating Cash Flow to", "Reinvestment Ratio", "Interest Burden",
-        "Tax Burden", "EV/EBITDA", "EV/Revenue", "Enterprise Value (EV)",
-        "Net Borrowing", "Total Debt Service",
+        "Tax Burden","Net Borrowing", "Total Debt Service",
         "Free Cash Flow (FCF)", "Free Cash Flow to Equity (",
-        "Free Cash Flow to Firm (FCFF)", "Cash Ratio", "Current Ratio",
+        "Cash Ratio", "Current Ratio",
         "Quick Ratio", "EBIT Margin", "EBITDA Margin", "Gross Profit Margin",
         "Net Profit Margin", "Operating Profit Margin", "Pretax Profit Margin",
-        "Return on Sales",
         "CapEx to Depreciation", "CapEx to Revenue", "Cash Flow Quality",
         "Cash Flow to Revenue", "Cash Return on Assets",
         "Cash Return on Equity", "Cash to Operating Income",
@@ -192,7 +190,7 @@ def select_all_ratios(page, logger=None):
         "NOPAT", "Operating Return on Assets",
         "ROA Adjusted", "ROE (DuPont 3-Factor)",
         "ROE (DuPont 5-Factor)", "Return on Assets (ROA)",
-        "Return on Equity (ROE)", "Return on Invested Capital (",
+        "Return on Equity (ROE)",
         "Debt to Assets", "Debt to Capital",
         "Debt to Equity", "Financial Leverage", "Net Debt to EBITDA",
     ]
@@ -204,7 +202,7 @@ def select_all_ratios(page, logger=None):
     # would otherwise match the wrong element.
     for label in [
         "Working Capital", "EBITDA", "Gross Profit", "Debt to EBITDA",
-        "Net Debt", "Total Debt", "Interest Coverage", "Operating Income",
+        "Net Debt", "Total Debt", "Interest Coverage",
     ]:
         click_ratio_if_present(page, label, exact=True, logger=logger)
 

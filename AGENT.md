@@ -255,15 +255,35 @@ formula is never computable.
 
 **Since then the failure mode has changed and is now upstream of this
 script.** Across the three 2026-08-04/05 runs (dev 121, uat 57, core 94
-companies), ten of the thirteen are no longer *offered*: the download logs
-"ratio not available, skipping" for every company, so they score 0% in
-`_ratio-coverage.csv` and never reach the export at all. They are gone from
-the picker under the names we ask for, not blank within it:
+companies), ten of the thirteen were no longer *offered*: the download logged
+"ratio not available, skipping" for every company, so they scored 0% in
+`_ratio-coverage.csv` and never reached the export at all. They are gone from
+the picker under the names we asked for, not blank within it:
 
 `Enterprise Value (EV)`, `EV/EBITDA`, `EV/Revenue`, `Fixed Asset Turnover`,
 `Return on Sales`, `Return on Invested Capital (ROIC)`, `Operating Income`,
 `CFO Interest Coverage`, `Free Cash Flow to Firm (FCFF)`,
 `Investing and Financing Coverage`.
+
+**The download no longer asks for those ten.** All ten labels are gone from
+`select_all_ratios`, along with the `Enterprise Value` section click that
+only existed to expose two of them. Three consequences worth knowing before
+reading a future report:
+
+- They will **not** appear in `_ratio-coverage.csv` at all — not at 0%.
+  `ratio_coverage.py` derives its rows by parsing the download script's own
+  click labels, so a label we stopped asking for stops being a row. A 0% line
+  is evidence a ratio just went missing; silence is the state after we've
+  acknowledged it. Their last 0% readings are in the 2026-08-04/05 runs.
+- Their formulas stay in the registry in `sector_analysis_ratios.py`. They
+  cost nothing there, they are the transcriptions described above, and if the
+  app brings a ratio back the only change needed is re-adding its click
+  label.
+- Re-adding a label is also the only way to find out whether it came back —
+  nothing enumerates the app's picker, so a ratio we don't ask for is
+  invisible to this pipeline whether it exists or not. That trade is
+  deliberate: the ten were costing a click attempt per company per run
+  (~270 across the three runs) to re-derive an answer already recorded here.
 
 Three have started producing values, so the "unexercised" label no longer
 applies to them:
@@ -303,8 +323,9 @@ resolves those same two names to rows 175 and 30 — different, populated
 occurrences elsewhere in the sheet — so the check "computes" a ratio from
 numbers the app never fed into it.
 
-The ratio dropping out of the export retired that particular FAIL, but not
-the limitation behind it, which belongs to the first-occurrence loader rather
+The ratio dropping out of the export retired that particular FAIL — and now
+that it is no longer even requested, it cannot come back silently — but that
+retires nothing about the limitation behind it, which belongs to the first-occurrence loader rather
 than to the FAIL rule: **any** ratio whose subtree is empty while the same
 metric names appear populated elsewhere will produce the same false FAIL.
 Fixing it means resolving a formula's inputs within its own subtree (by row

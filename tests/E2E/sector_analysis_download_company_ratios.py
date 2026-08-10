@@ -159,7 +159,7 @@ def select_all_ratios(page, logger=None):
     for section in [
         "Solvency Ratios", "Profitability Ratios", re.compile(r"^Profitability$"),
         "Performance", "Margins", "Liquidity Ratios", "Free Cash Flow",
-        "Financing", "Enterprise Value", "DuPont Analysis", "Coverage",
+        "Financing", "DuPont Analysis", "Coverage",
         "Asset Valuation", "Activity Ratios",
     ]:
         click_section_if_present(page, section, logger=logger)
@@ -171,7 +171,7 @@ def select_all_ratios(page, logger=None):
     ratio_labels = [
         "Cash Conversion Cycle", "Days Inventory on Hand (DIO)",
         "Days Payables Outstanding (", "Days Sales Outstanding (DSO)",
-        "Fixed Asset Turnover", "Inventory Turnover", "Payables Turnover",
+        "Inventory Turnover", "Payables Turnover",
         "Receivables Turnover", "Total Assets Turnover",
         "Working Capital Turnover",
         "Book Value of Equity", "Debt Coverage",

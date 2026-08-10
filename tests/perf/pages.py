@@ -122,19 +122,6 @@ class BasePage:
         expect(self.wait_first(key, candidates, timeout_ms)).to_have_text(
             re.compile(r"\S"), timeout=timeout_ms)
 
-    def wait_ready(self, timeout_ms: int = DEFAULT_TIMEOUT_MS):
-        """Best-effort wait for in-flight requests to settle after an
-        action that triggers a fetch (a search, a section switch).
-
-        Swallowed on timeout, as in the download suite: some pages hold a
-        long-poll or websocket open and never reach "networkidle", so this
-        is advisory - never the only thing a caller waits on.
-        """
-        try:
-            self.page.wait_for_load_state("networkidle", timeout=timeout_ms)
-        except PlaywrightTimeoutError:
-            pass
-
     def get_active_value_overlay_style(self):
         """The active overlay's style attribute, or None if absent."""
         overlay = self.locator(self.ACTIVE_VALUE_OVERLAY)
@@ -202,15 +189,17 @@ class DashboardPage(BasePage):
         own ordering - and companies differ enough in size that the timing
         was not comparable run to run.
 
-        The results are fetched asynchronously, so a settle wait comes
-        before checking the name is on screen: the searched company may
-        already be visible in the unfiltered grid, which would make a bare
-        text check pass against the pre-search cards.
+        The wait is on the result card's own "View Analysis" button rather
+        than on the network settling: the button is the thing the caller
+        goes on to click, so waiting for anything else is either too early
+        or a guess. Nothing here is timed - this runs before the timer -
+        so the wait costs only wall clock.
         """
         search_bar = self.wait_first("dashboard_search", self.SEARCH_BAR)
         search_bar.click()
         search_bar.fill(name)
-        self.wait_ready()
+
+        self.wait_first("first_card_analysis_button", self.FIRST_CARD_ANALYSIS_BUTTON)
         expect(self.page.get_by_text(name).first).to_be_visible(timeout=DEFAULT_TIMEOUT_MS)
 
     def open_first_card_analysis(self):

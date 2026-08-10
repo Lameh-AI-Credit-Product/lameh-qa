@@ -101,15 +101,27 @@ BASE_URL = os.environ.get("BASE_URL", "https://frontend-dev-36462279645.me-centr
 HEADLESS = False  # OTP login needs a visible window
 
 # Fixed inputs for the "New Analysis" wizard.
+#
+# All three are Materials companies that hold uploaded data in dev, uat
+# *and* core, so one config measures the same work on every deployment.
+# That is a narrower requirement than it sounds: Materials carries ~69
+# companies in each environment, but only 68 / 11 / 69 of them are
+# uploaded in dev / uat / core, and the eleven uat has are the entire
+# three-way intersection. Checked 2026-08-10 against
+# `sectors/grouped-by-companies` on each orchestrator; the other eight are
+# 1301, 1322, 2150, 2223, 2300, 4143, 9513, 9576.
+#
+# English and Arabic names are identical across the three, so either
+# spelling searches the same everywhere.
 SECTOR_ANALYSIS_COMPANIES = [
-    "Armah Sports Co.",
-    "MOBI Industry Co.",
-    "Saudi Vitrified Clay Pipes Co."
+    "Saudi Arabian Mining Co.",        # 1211
+    "National Gypsum Co.",             # 2090
+    "Saudi Vitrified Clay Pipes Co.",  # 2360
 ]
 # The company whose analysis the dashboard scenario opens. Searched for by
 # name rather than taking whichever card renders first, so the same
 # analysis is measured every run.
-DASHBOARD_COMPANY = "Armah Sports Co."
+DASHBOARD_COMPANY = "Saudi Arabian Mining Co."  # 1211
 
 # Ratios to select in the wizard's Ratio tab. Keep this list short and to
 # ratios that exist everywhere: all four read 100% coverage across all 131

@@ -38,23 +38,13 @@ import sys
 from pathlib import Path
 
 import reporting
+# The palette, page CSS and number formatting are reporting.py's, so a
+# comparison and the single-run reports it compares are one document.
+from reporting import (BASELINE, CRITICAL, GOOD, GRIDLINE, INK_MUTED,  # noqa: F401
+                       INK_PRIMARY, INK_SECONDARY, PAGE_CSS, RUN_COLORS,
+                       SURFACE, fmt)
 
-# Categorical slots 1-3, light mode, from the data-viz reference palette.
-# Validated as a set for all pairs: worst CVD dE 9.2, worst normal-vision
-# dE 24.0. Aqua sits below 3:1 on this surface, so every bar carries a
-# visible value label and the full table is on the page - the palette's
-# documented relief for exactly that case.
-RUN_COLORS = ["#2a78d6", "#eb6834", "#1baf7a"]
 MAX_RUNS = len(RUN_COLORS)
-
-SURFACE = "#fcfcfb"
-INK_PRIMARY = "#0b0b0b"
-INK_SECONDARY = "#52514e"
-INK_MUTED = "#898781"
-GRIDLINE = "#e1e0d9"
-BASELINE = "#c3c2b7"
-GOOD = "#006300"     # faster
-CRITICAL = "#d03b3b"  # slower
 
 # Below this, a difference in the mean is reported as unchanged: run-to-run
 # scatter on these scenarios is comfortably this size.
@@ -208,12 +198,6 @@ def _chart_base64(runs, metric):
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def fmt(value, suffix="s"):
-    if isinstance(value, (int, float)):
-        return f"{value:.3f}{suffix}"
-    return "&mdash;" if value is None else str(value)
-
-
 def build_html(runs, metrics):
     baseline = runs[0]
 
@@ -274,7 +258,7 @@ def build_html(runs, metrics):
     raw_blocks = []
     for i, run in enumerate(runs):
         keys = reporting.metric_keys(run["records"])
-        header = "".join(f"<th>{k}</th>" for k in keys)
+        header = "".join(f'<th class="num">{k}</th>' for k in keys)
         rows = "\n".join(
             f"<tr><td>{r['run']}</td>"
             + "".join(f'<td class="num">{fmt(r.get(k))}</td>' for k in keys)
@@ -293,34 +277,7 @@ def build_html(runs, metrics):
 <head>
 <meta charset="utf-8">
 <title>Perf comparison</title>
-<style>
-  body {{ font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-         margin: 2rem auto; max-width: 62rem; padding: 0 1.5rem;
-         background: {SURFACE}; color: {INK_PRIMARY}; }}
-  h1 {{ font-size: 1.4rem; margin-bottom: 0.25rem; }}
-  h2 {{ font-size: 1.05rem; margin: 2.5rem 0 0.75rem; }}
-  .sub {{ color: {INK_MUTED}; font-size: 0.82rem; }}
-  .runs {{ display: flex; flex-wrap: wrap; gap: 1.5rem; margin: 1.25rem 0 0.5rem; }}
-  .run {{ display: flex; gap: 0.6rem; align-items: flex-start; }}
-  .run-label {{ font-weight: 600; font-size: 0.9rem; }}
-  .run-meta {{ color: {INK_MUTED}; font-size: 0.78rem; }}
-  .tag {{ font-weight: 400; font-size: 0.7rem; color: {INK_SECONDARY};
-          border: 1px solid {BASELINE}; border-radius: 3px; padding: 0 4px; }}
-  .chip {{ display: inline-block; width: 10px; height: 10px; border-radius: 2px;
-           margin-right: 6px; vertical-align: baseline; }}
-  table {{ border-collapse: collapse; width: 100%; font-size: 0.86rem;
-           margin-bottom: 1rem; }}
-  th, td {{ border-bottom: 1px solid {GRIDLINE}; padding: 8px 10px;
-            text-align: left; vertical-align: top; }}
-  th {{ color: {INK_SECONDARY}; font-weight: 600; white-space: nowrap; }}
-  td.num, th.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
-  td.num .sub, td .sub {{ font-weight: 400; }}
-  .fail {{ color: {CRITICAL}; font-size: 0.78rem; }}
-  figure {{ margin: 0 0 1.25rem; }}
-  img {{ max-width: 100%; }}
-  details {{ margin-bottom: 0.75rem; }}
-  summary {{ cursor: pointer; font-size: 0.86rem; padding: 4px 0; }}
-</style>
+<style>{PAGE_CSS}</style>
 </head>
 <body>
   <h1>Load-time comparison</h1>

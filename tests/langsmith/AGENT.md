@@ -218,9 +218,20 @@ Verify before acting on these; they are snapshots, not invariants.
   metric that has data**: a wrong name and an empty metric both return `None`.
   `Revenue` is empty for every company checked so far; `Net Profit for the
   Period` works.
-- `DATASET_NAME` is still `materials-sector-v1` and `experiment_prefix` is
-  still `materials-sector`, both now covering two sectors. Renaming the
-  dataset starts a fresh one and leaves past experiments on the old.
+- `DATASET_NAME` is still `materials-sector-v1`, now covering two sectors.
+  Renaming the dataset starts a fresh one and leaves past experiments on the
+  old.
+- **Experiment names are `<ENV>-intelligence-fs-<hex>`**, e.g.
+  `UAT-intelligence-fs-d01438a5`. LangSmith appends the hex suffix; the rest
+  is `config.EXPERIMENT_PREFIX`, built from `$ENV` (`DEV`/`UAT`/`CORE`) and
+  `EXPERIMENT_SUITE`. The label matters because the three deployments hold
+  different data — see the roster differences under "Known state" — and an
+  experiment named by dataset alone can't be traced back to one. An unset or
+  unrecognized `$ENV` drops the prefix rather than failing the run, giving
+  `intelligence-fs-<hex>`: a missing label is visible in the dashboard, a
+  wrong one isn't. Nothing cross-checks `$ENV` against
+  `LAMEH_ORCHESTRATOR_URL`, so keep them in step by hand.
+  Experiments run before 2026-08-13 are named `materials-sector-<hex>`.
 - Renaming an evaluator key starts a *new* metric in LangSmith; past
   experiments keep the old one. Rename deliberately.
 - Feedback comments are built by `comment_format.py`, not by the evaluators,

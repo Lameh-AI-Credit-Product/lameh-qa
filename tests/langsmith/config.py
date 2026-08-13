@@ -17,6 +17,24 @@ LANGSMITH_PROJECT = "lameh-intelligence-eval"
 # TODO(user): confirm/rename before the first real run.
 DATASET_NAME = "materials-sector-v1"
 
+# --- Experiment naming -------------------------------------------------------
+# LangSmith appends its own 8-hex suffix, so the prefix below produces e.g.
+# "DEV-intelligence-fs-d01438a5". $ENV (DEV/UAT/CORE) is the same deployment
+# label the sector-analysis pipeline uses, and it matters here for the same
+# reason: the three deployments hold different data, so an experiment named
+# by dataset alone gives no way to tell later which one it ran against.
+#
+# Unlike the download step, an unset or unrecognized $ENV is not fatal - it
+# just drops the prefix ("intelligence-fs-d01438a5"). A missing label is
+# visible in the dashboard; a wrong one is not.
+VALID_ENVS = ("DEV", "UAT", "CORE")
+ENV = (os.environ.get("ENV") or "").strip().upper()
+if ENV not in VALID_ENVS:
+    ENV = ""
+
+EXPERIMENT_SUITE = "intelligence-fs"
+EXPERIMENT_PREFIX = f"{ENV}-{EXPERIMENT_SUITE}" if ENV else EXPERIMENT_SUITE
+
 # --- Orchestrator (the Intelligence agent under test) ---
 ORCHESTRATOR_URL = os.environ.get("LAMEH_ORCHESTRATOR_URL")
 ORCHESTRATOR_ORGANIZATION_ID = os.environ.get("LAMEH_ORGANIZATION_ID")

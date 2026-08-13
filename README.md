@@ -36,7 +36,7 @@ The E2E script, and the LangSmith eval suite, read their configuration (`BASE_UR
 cp .env.example .env
 ```
 
-`ENV` must be `DEV`, `UAT` or `CORE`, matching the deployment `BASE_URL` points at. It labels the Sector Analysis run folder (`data/sector-analysis/<ENV>-<timestamp>/`) and, through it, every report derived from that run — the three deployments export different ratio sets, so a run you can't attribute to one of them is hard to read later. The download refuses to start without it. Nothing checks it against `BASE_URL`, so keep the two in step by hand.
+`ENV` must be `DEV`, `UAT` or `CORE`, matching the deployment `BASE_URL` points at. It labels the Sector Analysis run folder (`data/sector-analysis/<ENV>-<timestamp>/`) and, through it, every report derived from that run — the three deployments export different ratio sets, so a run you can't attribute to one of them is hard to read later. The download refuses to start without it. It also names the LangSmith experiment (`<ENV>-intelligence-fs-<hex>`), which tolerates it being unset and just drops the prefix. Nothing checks it against `BASE_URL` or `LAMEH_ORCHESTRATOR_URL`, so keep them in step by hand.
 
 ## Usage
 
@@ -104,12 +104,12 @@ poetry run poe langsmith-run [--example-id materials-q1-cash-quality] [--max-con
 
 Examples run in parallel (4 at a time by default) since each prompt is a ~7–10 minute agent call — the whole dataset takes about as long as its slowest single prompt. Pass `--max-concurrency 1` to serialize.
 
-This prints an experiment name (e.g. `materials-sector-3a94b70b`) and a LangSmith dashboard URL, then automatically builds the markdown production-readiness report for that experiment once it finishes. Pass `--skip-report` to only run the experiment.
+This prints an experiment name (e.g. `UAT-intelligence-fs-3a94b70b` — the deployment from `ENV`, then a fixed suite name, then a suffix LangSmith generates) and a LangSmith dashboard URL, then automatically builds the markdown production-readiness report for that experiment once it finishes. Pass `--skip-report` to only run the experiment.
 
 To (re)build the report for an experiment on its own — e.g. an older run, or one where report generation failed:
 
 ```
-poetry run poe langsmith-report --experiment materials-sector-3a94b70b [--out path/to/report.md]
+poetry run poe langsmith-report --experiment UAT-intelligence-fs-3a94b70b [--out path/to/report.md]
 ```
 
 Written by default to `results/langsmith/<experiment>.md` (gitignored) — aggregates pass rates per dimension, sliced by sector/prompt type, against the thresholds in `tests/langsmith/config.py`, with every example linking to its LangSmith trace and orchestrator conversation thread.

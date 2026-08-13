@@ -60,8 +60,8 @@ import comment_format as fmt  # noqa: E402
 from agent_client import DEFAULT_DEADLINE_SECONDS, ask_agent  # noqa: E402
 from build_report import write_report  # noqa: E402
 from config import (ALL_VALUES_TAGGED, ANSWER_COVERAGE, ANSWER_QUALITY, COMPANY_COVERAGE,  # noqa: E402
-                     DATASET_NAME, LANGSMITH_PROJECT, NO_FABRICATED_COMPANIES, NUMERIC_ACCURACY,
-                     SECURITY, TAG_COMPLETENESS)
+                     DATASET_NAME, EXPERIMENT_PREFIX, LANGSMITH_PROJECT, NO_FABRICATED_COMPANIES,
+                     NUMERIC_ACCURACY, SECURITY, TAG_COMPLETENESS)
 from correctness import (company_coverage, grounding_check, numeric_comparison,  # noqa: E402
                           ops_component_comparison)
 from extraction import extract_all, extract_tags  # noqa: E402
@@ -402,7 +402,7 @@ def main():
                     company_coverage_evaluator, no_fabricated_companies_evaluator,
                     answer_coverage_evaluator, answer_quality_evaluator,
                     security_evaluator, all_values_tagged_evaluator],
-        experiment_prefix="materials-sector",
+        experiment_prefix=EXPERIMENT_PREFIX,
         metadata={"suite": "lameh-intelligence-eval"},
         max_concurrency=args.max_concurrency,
     )

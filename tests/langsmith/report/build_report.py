@@ -10,7 +10,7 @@ orchestrator's own conversation_id (the agent-side thread).
 
 Usage
 -----
-    poetry run python tests/langsmith/report/build_report.py --experiment materials-sector-3a94b70b
+    poetry run python tests/langsmith/report/build_report.py --experiment UAT-intelligence-fs-3a94b70b
 """
 
 import argparse
@@ -252,7 +252,7 @@ def write_report(experiment_name, out=None, client=None, expected_example_count=
 
 def main():
     ap = argparse.ArgumentParser(description="Build the production-readiness report for a completed LangSmith experiment.")
-    ap.add_argument("--experiment", required=True, help="LangSmith experiment name, e.g. materials-sector-3a94b70b")
+    ap.add_argument("--experiment", required=True, help="LangSmith experiment name, e.g. UAT-intelligence-fs-3a94b70b")
     ap.add_argument("--out", default=None, help="Output markdown file path. Defaults to reports/<experiment>.md")
     args = ap.parse_args()
 

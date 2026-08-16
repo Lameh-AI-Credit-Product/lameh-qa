@@ -15,6 +15,7 @@ module can: the shape of the whole thing, and the state of the world.
 ```
 poetry run poe langsmith-build-dataset     # sync prompt_set.json -> LangSmith dataset
 poetry run poe langsmith-run               # run the experiment + build the report
+poetry run poe langsmith-run --ai-mode fast           # the same set, fast mode
 poetry run poe langsmith-report --experiment <name>   # rebuild a report only
 ```
 
@@ -23,18 +24,59 @@ under a minute of evaluator overhead. The set is 4 prompt types × 2 sectors
 (Materials, Health Care Equipment & Svc) = 8 rows, so a run is also 32 judge
 calls. Useful flags on `langsmith-run`:
 
+- `--ai-mode expert|instant` — default `expert`; `fast` is an alias for
+  `instant`, which is what the API actually calls fast mode. See "The two AI
+  modes" below
 - `--example-id materials-q1-cash-quality` — one prompt only, for a fast loop
 - `--max-concurrency N` — default 8 (= the dataset size); use 1 to serialize
 - `--agent-timeout SECONDS` — default 900; a prompt past it is cut off, scored
   on the text that arrived, and fails `answer_coverage` as truncated
 - `--skip-report`
 
+## The two AI modes
+
+The agent answers in one of two modes, sent as `context.ai_mode` in the
+`/v0/chat` payload.
+
+**The product calls them "expert" and "fast"; the API calls them `expert` and
+`instant`.** Sending `"fast"` is a 422 — `ai_mode must be one of: instant,
+expert` — so `instant` is the value everywhere in this suite: in `AI_MODES`,
+in the experiment names, and in the run outputs. `fast` is accepted as a CLI
+alias (`config.AI_MODE_ALIASES`) and normalized before it reaches anything, so
+you can type the name you'd say out loud without two spellings ending up in
+the dashboard. Confirmed live against uat on 2026-08-16; both values stream
+and complete normally.
+
+Both modes are evaluated, as **two experiments over the one dataset** — never
+as two datasets and never as one mixed experiment:
+
+- **One dataset**, because LangSmith's comparison view is scoped to a single
+  dataset. Two datasets can't be diffed against each other at all, which would
+  destroy the only reason to run fast mode. A mode is a property of the system
+  under test — like `chat_model` and `reasoning_effort` sitting beside it in
+  `agent_client`, neither of which is in the dataset either — not a property
+  of the questions.
+- **Two experiments**, because an experiment's aggregate is per-experiment. A
+  single run holding both modes would have `build_report.apply_thresholds`
+  gating on an expert/fast blend, where a fast-mode security failure can
+  average into "ready".
+
+So comparing them is two invocations, and `--ai-mode` is not a list. The mode
+lands in three places: the experiment name
+(`UAT-intelligence-fs-instant-<hex>`), the experiment metadata, and every
+run's outputs — the last of which is what lets the report state the conditions
+a timing was measured under.
+
+Only expert mode has been run as a full experiment; everything under "Known
+state" below predates fast mode entirely, and no claim there has been checked
+against it.
+
 Reports land in `results/langsmith/<experiment>.md`, which is gitignored.
 
 ## Pipeline
 
 ```
-prompt_set.json ──build_dataset──> LangSmith dataset ("materials-sector-v1")
+prompt_set.json ──build_dataset──> LangSmith dataset ("FS-Intelligence")
                                          │
                           run_eval.target │ ask_agent (SSE stream)
                                          ▼
@@ -49,8 +91,8 @@ prompt_set.json ──build_dataset──> LangSmith dataset ("materials-sector-
 
 | File | Role |
 |---|---|
-| `run_eval.py` | entrypoint; the 8 evaluator functions; per-run parse + judge caches |
-| `agent_client.py` | the system under test — SSE client, deadline handling |
+| `run_eval.py` | entrypoint; the 9 evaluator functions; `--ai-mode`; per-run parse + judge caches |
+| `agent_client.py` | the system under test — SSE client, `ai_mode`, deadline handling |
 | `config.py` | evaluator keys, thresholds, env/credentials |
 | `comment_format.py` | renders each evaluator's findings as the feedback comment |
 | `judge_client.py` | Bedrock transport only (swappable/mockable) |
@@ -63,7 +105,7 @@ prompt_set.json ──build_dataset──> LangSmith dataset ("materials-sector-
 | `evaluators/metrics.py` | `compare`, `tolerance_match`, `mape` |
 | `report/build_report.py` | threshold gates, markdown output |
 
-## The eight evaluators
+## The nine evaluators
 
 Order below matches `EVALUATOR_KEYS`, which drives report column order.
 
@@ -77,8 +119,9 @@ Order below matches `EVALUATOR_KEYS`, which drives report column order.
 | `answer_quality` | on topic, usable, actually answers | judged | 0.90 |
 | `security` | leaks, injection compliance, regulated advice | judged | 1.00 |
 | `all_values_tagged` | figures stated with **no** tag at all | **hybrid** | 1.00 |
+| `response_time_seconds` | how long did the answer take? | **measured, in seconds** | — |
 
-Three things about that table are easy to get wrong:
+Four things about that table are easy to get wrong:
 
 **`tag_completeness` and `all_values_tagged` are two halves of one question**
 ("can a reader verify this figure?") and neither sees the other's failure
@@ -96,6 +139,13 @@ points of movement as noise.
 the row has `metrics_expected`. The comment records which path ran as
 `"metric_source": "judge"` or `"structural-fallback"`. q4 has no expected
 metrics, so it never calls the judge.
+
+**`response_time_seconds` breaks two rules the other eight share**: its score
+is a duration rather than a 0–1 rate, and lower is better. `build_report`
+handles it through `SECONDS_KEYS` — it renders as `487s`, not `48720.0%`, and
+its per-example marker is the duration rather than PASS/FAIL. It stays out of
+`GATED_KEYS`: a gate would need a per-mode budget, and there isn't a defensible
+one yet. Read the timing caveats below before quoting a number from it.
 
 ## Scoring semantics
 
@@ -115,6 +165,31 @@ Thresholds live in `config.THRESHOLDS`; `build_report.GATED_KEYS` decides
 which ones block. `tag_completeness` and `all_values_tagged` gate at 1.0 on
 purpose — an unverifiable figure isn't a quality tradeoff to tune. Relax only
 with a reason recorded in `config.py`.
+
+## Measuring response time
+
+The score comes from `agent_client`'s own stream timing (`elapsed_seconds`,
+carried through `target()`'s outputs), **not** from the latency column in the
+LangSmith dashboard. That column is real, but it isn't feedback: it can't sit
+in the comparison view beside the eight quality scores, isn't aggregated by
+`build_report`, and can't be gated. It also counts a deadline kill as an
+ordinary ~900s run, because `target()` catches the deadline and returns
+normally — the evaluator's comment says so instead.
+
+Two things will make you misread the number:
+
+- **Concurrency contaminates it.** At the default `--max-concurrency 8` the
+  whole dataset is in flight at once, so every timing includes queueing and
+  describes the orchestrator under 8-way load. It compares fairly against
+  another run at the *same* concurrency — which is all an expert-vs-fast
+  comparison needs — and means little as an absolute. Run at
+  `--max-concurrency 1` if you need a true per-prompt latency; that costs
+  ~80 minutes instead of ~10. The concurrency is recorded on every run and
+  printed in the report header for exactly this reason.
+- **Timed-out runs still score.** Their elapsed time is a real lower bound,
+  and dropping them would flatter the mean by deleting the slowest prompts.
+  The comment marks them; `answer_coverage` is where a timeout is actually
+  charged.
 
 ## Ground truth
 
@@ -218,20 +293,38 @@ Verify before acting on these; they are snapshots, not invariants.
   metric that has data**: a wrong name and an empty metric both return `None`.
   `Revenue` is empty for every company checked so far; `Net Profit for the
   Period` works.
-- `DATASET_NAME` is still `materials-sector-v1`, now covering two sectors.
-  Renaming the dataset starts a fresh one and leaves past experiments on the
-  old.
-- **Experiment names are `<ENV>-intelligence-fs-<hex>`**, e.g.
-  `UAT-intelligence-fs-d01438a5`. LangSmith appends the hex suffix; the rest
-  is `config.EXPERIMENT_PREFIX`, built from `$ENV` (`DEV`/`UAT`/`CORE`) and
-  `EXPERIMENT_SUITE`. The label matters because the three deployments hold
-  different data — see the roster differences under "Known state" — and an
-  experiment named by dataset alone can't be traced back to one. An unset or
-  unrecognized `$ENV` drops the prefix rather than failing the run, giving
-  `intelligence-fs-<hex>`: a missing label is visible in the dashboard, a
-  wrong one isn't. Nothing cross-checks `$ENV` against
+- `DATASET_NAME` is `FS-Intelligence` (was `materials-sector-v1` until
+  2026-08-16; it had long since stopped being one sector). **Editing
+  `DATASET_NAME` does not rename anything** — it points the code at a
+  different name, and `build_dataset.get_or_create_dataset` will happily
+  *create* an empty dataset under it and sync the 8 rows in, leaving every
+  past experiment attached to the old one. Rename in place instead, which
+  keeps the UUID and so keeps the history, and change `DATASET_NAME` in the
+  same breath. `langsmith` 0.10.10 has **no** `Client.update_dataset`, so the
+  rename goes through the REST endpoint on the client's own authenticated
+  transport:
+  `client.request_with_retries("PATCH", f"/datasets/{id}", request_kwargs={"json": {"name": ...}})`.
+  Done on 2026-08-16; the dataset is `8db5b0cb-b845-4bc0-90a3-8b2cd4e39085`
+  before and after. The
+  name is read in three places — `build_dataset`, `run_eval._select_examples`,
+  and `build_report.fetch_experiment_results`; the last degrades quietly if
+  it's stale (no examples resolve, so every row loses its `sector` and
+  `prompt_type` and the breakdown tables collapse into one `None` bucket)
+  rather than failing loudly.
+- **Experiment names are `<ENV>-intelligence-fs-<mode>-<hex>`**, e.g.
+  `UAT-intelligence-fs-instant-d01438a5`. LangSmith appends the hex suffix; the
+  rest is `config.experiment_prefix(ai_mode)`, built from `$ENV`
+  (`DEV`/`UAT`/`CORE`), `EXPERIMENT_SUITE`, and the mode. The `$ENV` label
+  matters because the three deployments hold different data — see the roster
+  differences under "Known state" — and an experiment named by dataset alone
+  can't be traced back to one. An unset or unrecognized `$ENV` drops that
+  segment rather than failing the run, giving `intelligence-fs-<mode>-<hex>`:
+  a missing label is visible in the dashboard, a wrong one isn't. The mode
+  segment is never dropped — two experiments over one dataset are told apart
+  by nothing else. Nothing cross-checks `$ENV` against
   `LAMEH_ORCHESTRATOR_URL`, so keep them in step by hand.
-  Experiments run before 2026-08-13 are named `materials-sector-<hex>`.
+  Experiments run before 2026-08-16 have no mode segment and were all expert;
+  those before 2026-08-13 are named `materials-sector-<hex>`.
 - Renaming an evaluator key starts a *new* metric in LangSmith; past
   experiments keep the old one. Rename deliberately.
 - Feedback comments are built by `comment_format.py`, not by the evaluators,

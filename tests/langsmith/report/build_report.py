@@ -10,7 +10,7 @@ orchestrator's own conversation_id (the agent-side thread).
 
 Usage
 -----
-    poetry run python tests/langsmith/report/build_report.py --experiment UAT-intelligence-fs-3a94b70b
+    poetry run python tests/langsmith/report/build_report.py --experiment UAT-intelligence-fs-expert-3a94b70b
 """
 
 import argparse
@@ -25,7 +25,7 @@ from langsmith import Client
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import (ALL_VALUES_TAGGED, ANSWER_COVERAGE, ANSWER_QUALITY, COMPANY_COVERAGE,  # noqa: E402
                      DATASET_NAME, EVALUATOR_KEYS, NO_FABRICATED_COMPANIES, NUMERIC_ACCURACY,
-                     SECURITY, TAG_COMPLETENESS, THRESHOLDS)
+                     RESPONSE_TIME, SECURITY, TAG_COMPLETENESS, THRESHOLDS)
 
 DIMENSION_KEYS = EVALUATOR_KEYS
 
@@ -39,7 +39,13 @@ DIMENSION_LABELS = {
     ANSWER_QUALITY: "Answer Quality",
     SECURITY: "Security",
     ALL_VALUES_TAGGED: "All Values Tagged",
+    RESPONSE_TIME: "Response Time",
 }
+
+# Every dimension is a 0-1 rate rendered as a percentage except this one,
+# which is a duration in seconds (config.RESPONSE_TIME). Rendering it with
+# the others would print a 487-second answer as "48720.0%".
+SECONDS_KEYS = (RESPONSE_TIME,)
 
 # Which dimensions gate release, and how. Everything else is reported but
 # doesn't block: answer_coverage and no_fabricated_companies are diagnostic
@@ -74,9 +80,25 @@ def fetch_experiment_results(experiment_name, client=None):
             "scores": scores,
             "comments": comments,
             "conversation_id": outputs.get("conversation_id"),
+            "ai_mode": outputs.get("ai_mode"),
+            "max_concurrency": outputs.get("max_concurrency"),
             "run_url": run.url,
         })
     return rows
+
+
+def run_conditions(rows):
+    """The mode and concurrency the run was executed under, read off the runs
+    themselves rather than assumed.
+
+    Both exist for Response Time's sake: the score is only meaningful next to
+    the mode it measured and the load it was measured under. Read as a set,
+    so a run that somehow mixed either shows both values rather than silently
+    reporting the first. Runs from before these were recorded have neither,
+    and were all expert."""
+    def _distinct(field):
+        return sorted({str(r[field]) for r in rows if r.get(field) is not None})
+    return {"ai_mode": _distinct("ai_mode"), "max_concurrency": _distinct("max_concurrency")}
 
 
 def _pass_rate(values):
@@ -133,6 +155,16 @@ def _fmt_pct(value):
     return f"{value * 100:.1f}%" if value is not None else "n/a"
 
 
+def _fmt_seconds(value):
+    return f"{value:.0f}s" if value is not None else "n/a"
+
+
+def _fmt_dimension(key, value):
+    """A dimension's value in its own units - percent for the rates, seconds
+    for the durations."""
+    return _fmt_seconds(value) if key in SECONDS_KEYS else _fmt_pct(value)
+
+
 def _fmt_gate_row(name, gate):
     threshold_str = f"{gate['threshold'] * 100:.0f}%" if isinstance(gate["threshold"], float) else str(gate["threshold"])
     return f"| {name} | {_fmt_pct(gate['value'])} | {threshold_str} | {gate['status']} |"
@@ -156,7 +188,15 @@ def render_markdown(experiment_name, rows, aggregates, gates):
     lines.append(f"# Lameh Intelligence - Production Readiness Report")
     lines.append(f"\nExperiment: `{experiment_name}`  ")
     lines.append(f"Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}  ")
-    lines.append(f"Examples evaluated: {len(rows)}")
+    lines.append(f"Examples evaluated: {len(rows)}  ")
+
+    conditions = run_conditions(rows)
+    if conditions["ai_mode"]:
+        lines.append(f"AI mode: `{', '.join(conditions['ai_mode'])}`  ")
+    if conditions["max_concurrency"]:
+        lines.append(f"Concurrency: {', '.join(conditions['max_concurrency'])} prompts at once "
+                      f"- Response Time below is comparable to another run at the same "
+                      f"concurrency, not an absolute latency")
 
     lines.append("\n## Overall Readiness Gates\n")
     lines.append("| Dimension | Score | Threshold | Status |")
@@ -176,7 +216,7 @@ def render_markdown(experiment_name, rows, aggregates, gates):
         lines.append(f"| {group_label} | {header} |")
         lines.append(divider)
         for group, dims in sorted(grouped.items(), key=lambda kv: str(kv[0])):
-            cells = " | ".join(_fmt_pct(dims.get(k)) for k in DIMENSION_KEYS)
+            cells = " | ".join(_fmt_dimension(k, dims.get(k)) for k in DIMENSION_KEYS)
             lines.append(f"| {group} | {cells} |")
 
     lines.append("\n## Per-Example Detail\n")
@@ -186,7 +226,13 @@ def render_markdown(experiment_name, rows, aggregates, gates):
         for key in DIMENSION_KEYS:
             score = row["scores"].get(key)
             comment = row["comments"].get(key)
-            marker = "PASS" if score == 1.0 else ("FAIL" if score == 0.0 else "n/a" if score is None else f"{score:.2f}")
+            if key in SECONDS_KEYS:
+                # A duration has no pass mark, and 1.0 second must not print
+                # as "PASS".
+                marker = _fmt_seconds(score)
+            else:
+                marker = ("PASS" if score == 1.0 else "FAIL" if score == 0.0
+                          else "n/a" if score is None else f"{score:.2f}")
             lines.extend(_detail_lines(DIMENSION_LABELS[key], marker, comment))
         lines.append(f"- LangSmith trace: {row['run_url']}")
         if row["conversation_id"]:
@@ -252,7 +298,8 @@ def write_report(experiment_name, out=None, client=None, expected_example_count=
 
 def main():
     ap = argparse.ArgumentParser(description="Build the production-readiness report for a completed LangSmith experiment.")
-    ap.add_argument("--experiment", required=True, help="LangSmith experiment name, e.g. UAT-intelligence-fs-3a94b70b")
+    ap.add_argument("--experiment", required=True,
+                     help="LangSmith experiment name, e.g. UAT-intelligence-fs-expert-3a94b70b")
     ap.add_argument("--out", default=None, help="Output markdown file path. Defaults to reports/<experiment>.md")
     args = ap.parse_args()
 

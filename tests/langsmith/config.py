@@ -14,19 +14,50 @@ load_dotenv()
 
 LANGSMITH_PROJECT = "lameh-intelligence-eval"
 
-# TODO(user): confirm/rename before the first real run.
-DATASET_NAME = "materials-sector-v1"
+DATASET_NAME = "FS-Intelligence"
+
+# --- AI mode (the agent's own answering mode, not a property of the dataset) --
+# The agent answers in one of two modes, and both need evaluating. The mode is
+# a property of the system under test - like chat_model and reasoning_effort
+# beside it in agent_client - not of the questions, so both modes run against
+# the *same* dataset as two separate experiments. That is what makes them
+# comparable: LangSmith's comparison view is scoped to one dataset, so
+# splitting the prompts per mode would throw away the side-by-side diff that
+# is the whole reason for running fast at all.
+#
+# Two experiments rather than one for the same reason the gates exist: an
+# experiment's aggregate is per-experiment, so a single mixed run would gate
+# on an expert/fast blend and a fast-mode failure could average into "ready".
+# The wire values, which are what /v0/chat validates against: send anything
+# else and it 422s with "ai_mode must be one of: instant, expert". Note the
+# product calls the second one **fast** - "instant" appears nowhere in the UI.
+# `fast` is therefore accepted as a CLI alias (see AI_MODE_ALIASES) and
+# normalized away immediately, so exactly one spelling reaches the experiment
+# names and the run outputs.
+AI_MODES = ("expert", "instant")
+AI_MODE_ALIASES = {"fast": "instant"}
+DEFAULT_AI_MODE = "expert"
+
+
+def normalize_ai_mode(value):
+    """CLI spelling -> wire value. Unknown values pass through unchanged for
+    argparse's `choices` to reject with the valid list."""
+    return AI_MODE_ALIASES.get(value, value)
 
 # --- Experiment naming -------------------------------------------------------
 # LangSmith appends its own 8-hex suffix, so the prefix below produces e.g.
-# "DEV-intelligence-fs-d01438a5". $ENV (DEV/UAT/CORE) is the same deployment
-# label the sector-analysis pipeline uses, and it matters here for the same
-# reason: the three deployments hold different data, so an experiment named
-# by dataset alone gives no way to tell later which one it ran against.
+# "DEV-intelligence-fs-expert-d01438a5". Two labels are carried:
 #
-# Unlike the download step, an unset or unrecognized $ENV is not fatal - it
-# just drops the prefix ("intelligence-fs-d01438a5"). A missing label is
-# visible in the dashboard; a wrong one is not.
+# $ENV (DEV/UAT/CORE) is the same deployment label the sector-analysis pipeline
+# uses, and it matters here for the same reason: the three deployments hold
+# different data, so an experiment named by dataset alone gives no way to tell
+# later which one it ran against. Unlike the download step, an unset or
+# unrecognized $ENV is not fatal - it just drops that part of the prefix. A
+# missing label is visible in the dashboard; a wrong one is not.
+#
+# The ai_mode goes in the name too, and unlike $ENV it is never omitted: two
+# experiments over one dataset are only telling apart by it, and the whole
+# point of running both is comparing them.
 VALID_ENVS = ("DEV", "UAT", "CORE")
 ENV = (os.environ.get("ENV") or "").strip().upper()
 if ENV not in VALID_ENVS:
@@ -34,6 +65,12 @@ if ENV not in VALID_ENVS:
 
 EXPERIMENT_SUITE = "intelligence-fs"
 EXPERIMENT_PREFIX = f"{ENV}-{EXPERIMENT_SUITE}" if ENV else EXPERIMENT_SUITE
+
+
+def experiment_prefix(ai_mode):
+    """e.g. "UAT-intelligence-fs-instant". Experiments run before 2026-08-16
+    have no mode segment and were all expert."""
+    return f"{EXPERIMENT_PREFIX}-{ai_mode}"
 
 # --- Orchestrator (the Intelligence agent under test) ---
 ORCHESTRATOR_URL = os.environ.get("LAMEH_ORCHESTRATOR_URL")
@@ -81,10 +118,21 @@ ANSWER_QUALITY = "answer_quality"                # on-topic, usable, actually an
 SECURITY = "security"                            # no leaks, injection compliance, or regulated advice
 ALL_VALUES_TAGGED = "all_values_tagged"          # no financial figure stated without provenance
 
+# Measured, not judged. Scored in *seconds*, not as a 0-1 rate, and lower is
+# better - the only key in the suite for which either is true. It exists as
+# feedback rather than being read off the dashboard's own latency column
+# because only feedback is comparable: the comparison view diffs scores, and
+# a mode comparison wants response time sitting in the same table as the eight
+# quality columns. The dashboard latency also counts a deadline kill as an
+# ordinary ~900s run, while this reads agent_client's own stream timing and
+# says so in the comment. Ungated (see build_report.GATED_KEYS): what counts
+# as too slow differs per mode and isn't settled yet.
+RESPONSE_TIME = "response_time_seconds"
+
 # Order matters: this drives the report's column order, so it reads
-# deterministic-first, then judged.
+# deterministic-first, then judged, then measured.
 EVALUATOR_KEYS = (NUMERIC_ACCURACY, TAG_COMPLETENESS, COMPANY_COVERAGE, NO_FABRICATED_COMPANIES,
-                  ANSWER_COVERAGE, ANSWER_QUALITY, SECURITY, ALL_VALUES_TAGGED)
+                  ANSWER_COVERAGE, ANSWER_QUALITY, SECURITY, ALL_VALUES_TAGGED, RESPONSE_TIME)
 
 # --- Report thresholds (stage 5) - configurable, not hardcoded into logic ---
 # TAG_COMPLETENESS and ALL_VALUES_TAGGED gate at 1.0 on purpose: an

@@ -286,6 +286,38 @@ def all_values_tagged_no_figures():
     return "not graded: the response states no financial figures at all"
 
 
+# --- response_time_seconds --------------------------------------------------
+
+def _duration(seconds):
+    """Seconds, plus minutes once they stop being countable at a glance -
+    "487.2s (8m 07s)". Prompts here run 7-10 minutes, and nobody reads 487
+    as eight minutes without doing the division."""
+    if seconds < 90:
+        return f"{seconds:.1f}s"
+    return f"{seconds:.1f}s ({int(seconds) // 60}m {int(seconds) % 60:02d}s)"
+
+
+def response_time(elapsed, ai_mode, max_concurrency, timed_out=False, completed=True):
+    lines = [_duration(elapsed) + (f" in {ai_mode} mode" if ai_mode else "")]
+    if timed_out:
+        lines.append("- cut off at the deadline: this is a lower bound on the real "
+                      "response time, not a measurement of it")
+    elif not completed:
+        lines.append("- the stream ended without a message_complete event, so the answer "
+                      "is truncated and this is the time to the cut-off")
+    if max_concurrency and max_concurrency > 1:
+        # Without this the number reads as a per-prompt latency, which it is
+        # not: at the default concurrency the whole dataset is in flight at
+        # once and every timing includes the queueing that causes.
+        lines.append(f"- measured with {max_concurrency} prompts running at once - comparable "
+                      f"to another run at the same concurrency, not an absolute latency")
+    return _joined(lines)
+
+
+def response_time_unmeasured():
+    return "not graded: the run recorded no elapsed_seconds"
+
+
 # --- judge failures ---------------------------------------------------------
 
 def judge_error(verdict):

@@ -12,7 +12,7 @@ QA tooling and scope documentation for the Lameh platform.
 - **`tests/E2E/sector_analysis_download_company_ratios.py`** — Playwright script that logs in once (manual OTP), then loops through a list of companies building a "select all ratios" Sector Analysis and downloading each Excel export under `data/`.
 - **`tests/coverage/ratio_coverage.py`** — post-processing step over one download run: of the ratios the download script asks for, how many companies actually got each one. Every ratio starts at full coverage and each "ratio not available, skipping" line in `run.log` takes one company off it, sorted rarest-first. Separates a genuine per-company data gap from a ratio the app no longer offers under that name at all.
 - **`tests/coverage/ratio_emptiness.py`** — the next question after coverage: when a ratio *was* offered, did it ever hold a number? Reports per-ratio blank and zero rates across a run, kept as separate columns because a blank means the app had nothing to show while a `0` is often a silent substitution for a missing input. A ratio blank in every period of every company still reads as 100% coverage, which is how twelve of them went unnoticed.
-- **`tests/langsmith/`** — LangSmith eval suite for the Lameh Intelligence module (the LLM agent that answers financial-analysis prompts). Builds a prompt-set dataset, runs it against the live agent, grades each response for correctness (live ground-truth comparison), helpfulness (completeness + LLM-as-judge), and safety (not yet built), then produces a markdown production-readiness report. See [tests/langsmith/config.py](tests/langsmith/config.py) for thresholds/settings.
+- **`tests/langsmith/`** — LangSmith eval suite for the Lameh Intelligence module (the LLM agent that answers financial-analysis prompts). Builds a prompt-set dataset, runs it against the live agent in either of its two answering modes, grades each response for correctness (live ground-truth comparison), verifiability, coverage, safety and response time, then produces a markdown production-readiness report. See [tests/langsmith/config.py](tests/langsmith/config.py) for thresholds/settings and [tests/langsmith/AGENT.md](tests/langsmith/AGENT.md) for how the whole thing fits together.
 - **`results/`** — generated CSV reports from running the ratio-verification script (gitignored).
 - **`data/`** — downloaded `.xlsx` exports from the E2E script (gitignored).
 
@@ -36,7 +36,7 @@ The E2E script, and the LangSmith eval suite, read their configuration (`BASE_UR
 cp .env.example .env
 ```
 
-`ENV` must be `DEV`, `UAT` or `CORE`, matching the deployment `BASE_URL` points at. It labels the Sector Analysis run folder (`data/sector-analysis/<ENV>-<timestamp>/`) and, through it, every report derived from that run — the three deployments export different ratio sets, so a run you can't attribute to one of them is hard to read later. The download refuses to start without it. It also names the LangSmith experiment (`<ENV>-intelligence-fs-<hex>`), which tolerates it being unset and just drops the prefix. Nothing checks it against `BASE_URL` or `LAMEH_ORCHESTRATOR_URL`, so keep them in step by hand.
+`ENV` must be `DEV`, `UAT` or `CORE`, matching the deployment `BASE_URL` points at. It labels the Sector Analysis run folder (`data/sector-analysis/<ENV>-<timestamp>/`) and, through it, every report derived from that run — the three deployments export different ratio sets, so a run you can't attribute to one of them is hard to read later. The download refuses to start without it. It also names the LangSmith experiment (`<ENV>-intelligence-fs-<mode>-<hex>`), which tolerates it being unset and just drops that segment. Nothing checks it against `BASE_URL` or `LAMEH_ORCHESTRATOR_URL`, so keep them in step by hand.
 
 ## Usage
 
@@ -80,7 +80,7 @@ This reads the ratio labels straight out of the download script's source, so tha
 
 ### LangSmith eval suite (Lameh Intelligence)
 
-Push the prompt set (`tests/langsmith/dataset/prompt_set.json`) to the LangSmith dataset (also picks up any edits to existing prompts, not just new ones):
+Push the prompt set (`tests/langsmith/dataset/prompt_set.json`) to the `FS-Intelligence` LangSmith dataset (also picks up any edits to existing prompts, not just new ones):
 
 ```
 poetry run poe langsmith-build-dataset
@@ -91,25 +91,38 @@ Run the eval — calls the live agent for every dataset example (or just one via
 | Evaluator | What it checks |
 |---|---|
 | `numeric_accuracy` | Every number the agent states, against the live database within 1% tolerance |
+| `tag_completeness` | Every `<calc>`/`<number>` tag carries the fields needed to look its figure up at all |
+| `company_coverage` | Every company the prompt asked about is actually present |
 | `no_fabricated_companies` | Every company the agent names actually exists in the sector |
 | `answer_coverage` | The answer covers every company, metric and fiscal year the prompt asked for |
 | `answer_quality` | LLM judge: on topic, well formatted, and actually answers the question |
+| `security` | LLM judge: no leaked internals, no obeying injected instructions, no regulated investment advice |
+| `all_values_tagged` | No financial figure stated with no provenance tag at all |
+| `response_time_seconds` | How long the answer took — in seconds, not a percentage, and lower is better |
 
-A blank score means "not applicable to this example" (no numbers to compare, no companies named, nothing specific expected) — distinct from a failing `0`.
-
+A blank score means "not applicable to this example" (no numbers to compare, no companies named, nothing specific expected) — distinct from a failing `0`. A judge failure also scores blank, so an outage shrinks the sample rather than failing the run; check the per-example detail before trusting a headline number.
 
 ```
-poetry run poe langsmith-run [--example-id materials-q1-cash-quality] [--max-concurrency 4] [--report-out path/to/report.md] [--skip-report]
+poetry run poe langsmith-run [--ai-mode expert|fast] [--example-id materials-q1-cash-quality] [--max-concurrency 8] [--report-out path/to/report.md] [--skip-report]
 ```
 
-Examples run in parallel (4 at a time by default) since each prompt is a ~7–10 minute agent call — the whole dataset takes about as long as its slowest single prompt. Pass `--max-concurrency 1` to serialize.
+Examples run in parallel (8 at a time by default, one per dataset row) since each prompt is a ~7–10 minute agent call — the whole dataset takes about as long as its slowest single prompt. Pass `--max-concurrency 1` to serialize.
 
-This prints an experiment name (e.g. `UAT-intelligence-fs-3a94b70b` — the deployment from `ENV`, then a fixed suite name, then a suffix LangSmith generates) and a LangSmith dashboard URL, then automatically builds the markdown production-readiness report for that experiment once it finishes. Pass `--skip-report` to only run the experiment.
+**Testing both AI modes.** The agent answers in expert mode or fast mode, and `--ai-mode` picks which (default `expert`). A run is one mode, so comparing them is two runs against the same dataset — which is what makes them comparable, since LangSmith's side-by-side comparison view only works within one dataset:
+
+```
+poetry run poe langsmith-run                 # expert
+poetry run poe langsmith-run --ai-mode fast  # fast
+```
+
+The API's own name for fast mode is `instant`, and that is the spelling that appears in experiment names and reports; `fast` is accepted here as an alias for it. Note `response_time_seconds` is measured with the whole dataset in flight at once, so it compares fairly between two runs at the same `--max-concurrency` and is not an absolute per-prompt latency — the report header states the concurrency for that reason.
+
+Each run prints an experiment name (e.g. `UAT-intelligence-fs-expert-3a94b70b` — the deployment from `ENV`, then a fixed suite name, then the AI mode, then a suffix LangSmith generates) and a LangSmith dashboard URL, then automatically builds the markdown production-readiness report for that experiment once it finishes. Pass `--skip-report` to only run the experiment.
 
 To (re)build the report for an experiment on its own — e.g. an older run, or one where report generation failed:
 
 ```
-poetry run poe langsmith-report --experiment UAT-intelligence-fs-3a94b70b [--out path/to/report.md]
+poetry run poe langsmith-report --experiment UAT-intelligence-fs-expert-3a94b70b [--out path/to/report.md]
 ```
 
-Written by default to `results/langsmith/<experiment>.md` (gitignored) — aggregates pass rates per dimension, sliced by sector/prompt type, against the thresholds in `tests/langsmith/config.py`, with every example linking to its LangSmith trace and orchestrator conversation thread.
+Written by default to `results/langsmith/<experiment>.md` (gitignored) — aggregates each dimension (pass rates, or mean seconds for response time), sliced by sector/prompt type, against the thresholds in `tests/langsmith/config.py`, with every example linking to its LangSmith trace and orchestrator conversation thread. The header records the AI mode and concurrency the run used.

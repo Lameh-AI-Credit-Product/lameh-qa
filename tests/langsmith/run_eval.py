@@ -5,7 +5,7 @@ Wires the dataset, the agent, and the evaluators built so far into one
 LangSmith experiment run, visible in the LangSmith dashboard under project
 config.LANGSMITH_PROJECT.
 
-Eight evaluators in two families:
+Nine evaluators in three families:
 
   deterministic (parse the response, query the live DB)
     numeric_accuracy       stated values vs ground truth - <calc> results,
@@ -21,6 +21,11 @@ Eight evaluators in two families:
     security               leaks, injection compliance, regulated advice
     all_values_tagged      figures stated with no provenance tag at all
     (answer_coverage also consumes a judged metric-coverage verdict)
+
+  measured
+    response_time_seconds  how long the answer took, in seconds - scored as
+                           the raw measurement, lower being better, which is
+                           true of nothing else here
 
 The deterministic pair (tag_completeness) and judged pair (all_values_tagged)
 are two halves of one question - "can a reader verify this figure?". The
@@ -40,9 +45,16 @@ Once the experiment finishes, the markdown production-readiness report is
 built automatically from it (results/langsmith/<experiment>.md) - pass
 --skip-report to only run the experiment.
 
+The agent answers in one of two modes, `--ai-mode expert` (the default) or
+`instant` - the latter being what the product calls **fast** mode, and `fast`
+is accepted as an alias. A run is one mode; comparing them is two runs over
+the same dataset, which is what LangSmith's comparison view is scoped to. See
+config.AI_MODES.
+
 Usage
 -----
     poetry run python tests/langsmith/run_eval.py
+    poetry run python tests/langsmith/run_eval.py --ai-mode fast
 """
 
 import argparse
@@ -59,9 +71,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "report"))
 import comment_format as fmt  # noqa: E402
 from agent_client import DEFAULT_DEADLINE_SECONDS, ask_agent  # noqa: E402
 from build_report import write_report  # noqa: E402
-from config import (ALL_VALUES_TAGGED, ANSWER_COVERAGE, ANSWER_QUALITY, COMPANY_COVERAGE,  # noqa: E402
-                     DATASET_NAME, EXPERIMENT_PREFIX, LANGSMITH_PROJECT, NO_FABRICATED_COMPANIES,
-                     NUMERIC_ACCURACY, SECURITY, TAG_COMPLETENESS)
+from config import (AI_MODE_ALIASES, AI_MODES, ALL_VALUES_TAGGED, ANSWER_COVERAGE,  # noqa: E402
+                     ANSWER_QUALITY, COMPANY_COVERAGE, DATASET_NAME, DEFAULT_AI_MODE,
+                     LANGSMITH_PROJECT, NO_FABRICATED_COMPANIES, NUMERIC_ACCURACY,
+                     RESPONSE_TIME, SECURITY, TAG_COMPLETENESS, experiment_prefix,
+                     normalize_ai_mode)
 from correctness import (company_coverage, grounding_check, numeric_comparison,  # noqa: E402
                           ops_component_comparison)
 from extraction import extract_all, extract_tags  # noqa: E402
@@ -87,8 +101,21 @@ REPORT_RETRY_DELAY_SECONDS = 10
 DEFAULT_MAX_CONCURRENCY = 8
 
 # Wall-clock budget per prompt, overridable with --agent-timeout. Module-level
-# because LangSmith calls target() itself and gives us nowhere to pass it.
+# because LangSmith calls target() itself and gives us nowhere to pass it. The
+# same goes for the two below.
 _agent_deadline_seconds = DEFAULT_DEADLINE_SECONDS
+
+# Which mode the agent answers in - "expert" or "fast" (--ai-mode). One run is
+# one mode; comparing them means two runs over the same dataset. See
+# config.AI_MODES for why it's not a dataset field.
+_agent_mode = DEFAULT_AI_MODE
+
+# Recorded per run purely so response_time_seconds can be read honestly later:
+# at the default concurrency every prompt is in flight at once, so the timings
+# describe the orchestrator under N-way load, not the mode on its own. They
+# compare fairly against another run at the same concurrency and mean little
+# as absolutes, and the report can only say so if it knows the number.
+_max_concurrency = DEFAULT_MAX_CONCURRENCY
 
 
 def _single_company_or_none(metadata):
@@ -154,7 +181,8 @@ def target(inputs):
     `timed_out`/`elapsed_seconds` ride along in the outputs so a prompt that
     blew the deadline is visible in the dashboard as its own thing, not just
     as a mysteriously short answer."""
-    result = ask_agent(inputs["prompt"], deadline_seconds=_agent_deadline_seconds)
+    result = ask_agent(inputs["prompt"], ai_mode=_agent_mode,
+                        deadline_seconds=_agent_deadline_seconds)
     if result["timed_out"]:
         print(f"  TIMED OUT after {result['elapsed_seconds']}s "
               f"({len(result['answer'])} chars received): {inputs['prompt'][:60]!r}")
@@ -164,6 +192,10 @@ def target(inputs):
         "completed": result["completed"],
         "timed_out": result["timed_out"],
         "elapsed_seconds": result["elapsed_seconds"],
+        # The conditions the timing above was measured under, carried on the
+        # run itself so a report or a comparison never has to assume them.
+        "ai_mode": _agent_mode,
+        "max_concurrency": _max_concurrency,
     }
 
 
@@ -355,6 +387,34 @@ def all_values_tagged_evaluator(run, example):
     }
 
 
+def response_time_evaluator(run, example):
+    """How long the agent took to answer, in seconds.
+
+    Not a rate and not a verdict: the score *is* the measurement, because the
+    question it answers ("how much time does fast mode actually save?") wants
+    a distribution rather than a pass mark. That makes it the one key where
+    lower is better and the one the report renders as `s` instead of `%` -
+    see config.RESPONSE_TIME, and keep it out of build_report.GATED_KEYS
+    until there's a per-mode budget worth enforcing.
+
+    A timed-out run still scores. Its elapsed time is a real lower bound and
+    dropping it would quietly flatter the mean by deleting exactly the slowest
+    prompts; the comment marks it so nobody reads it as a completed answer."""
+    outputs = run.outputs or {}
+    elapsed = outputs.get("elapsed_seconds")
+    if elapsed is None:
+        return {"key": RESPONSE_TIME, "score": None,
+                "comment": fmt.response_time_unmeasured()}
+    return {
+        "key": RESPONSE_TIME,
+        "score": elapsed,
+        "comment": fmt.response_time(elapsed, outputs.get("ai_mode"),
+                                      outputs.get("max_concurrency"),
+                                      timed_out=outputs.get("timed_out", False),
+                                      completed=outputs.get("completed", True)),
+    }
+
+
 def _select_examples(example_id):
     """All examples in the dataset, or just the one whose prompt_set.json
     `id` matches --example-id (e.g. "materials-q1-cash-quality") - useful for
@@ -375,6 +435,14 @@ def main():
     ap.add_argument("--example-id", default=None,
                      help="Only run the single dataset example with this prompt_set.json id "
                           "(e.g. materials-q1-cash-quality). Omit to run the whole dataset.")
+    ap.add_argument("--ai-mode", type=normalize_ai_mode,
+                     choices=AI_MODES, default=DEFAULT_AI_MODE,
+                     help=f"Which mode the agent answers in (default {DEFAULT_AI_MODE}). "
+                          f"'{'/'.join(AI_MODE_ALIASES)}' is accepted for 'instant', which is what "
+                          f"the product calls fast mode and what the API requires. One run is one "
+                          f"mode: it names the experiment and rides along on every run's outputs. "
+                          f"To compare the two, run this twice - both experiments land on the same "
+                          f"dataset, which is what LangSmith's comparison view needs.")
     ap.add_argument("--max-concurrency", type=int, default=DEFAULT_MAX_CONCURRENCY,
                      help=f"How many dataset examples to run against the agent at once "
                           f"(default {DEFAULT_MAX_CONCURRENCY}). Each prompt takes ~7-10 min, so running "
@@ -391,19 +459,25 @@ def main():
                      help="Only run the experiment; don't build the markdown report afterwards.")
     args = ap.parse_args()
 
-    global _agent_deadline_seconds
+    global _agent_deadline_seconds, _agent_mode, _max_concurrency
     _agent_deadline_seconds = args.agent_timeout or None
+    _agent_mode = args.ai_mode
+    _max_concurrency = args.max_concurrency
 
     examples = _select_examples(args.example_id)
+    print(f"Running {len(examples)} example(s) in {args.ai_mode} mode, "
+          f"{args.max_concurrency} at a time.")
     results = evaluate(
         target,
         data=examples,
         evaluators=[numeric_accuracy_evaluator, tag_completeness_evaluator,
                     company_coverage_evaluator, no_fabricated_companies_evaluator,
                     answer_coverage_evaluator, answer_quality_evaluator,
-                    security_evaluator, all_values_tagged_evaluator],
-        experiment_prefix=EXPERIMENT_PREFIX,
-        metadata={"suite": "lameh-intelligence-eval"},
+                    security_evaluator, all_values_tagged_evaluator,
+                    response_time_evaluator],
+        experiment_prefix=experiment_prefix(args.ai_mode),
+        metadata={"suite": "lameh-intelligence-eval", "ai_mode": args.ai_mode,
+                  "max_concurrency": args.max_concurrency},
         max_concurrency=args.max_concurrency,
     )
     print(f"Done - check the '{LANGSMITH_PROJECT}' project in the LangSmith dashboard.")

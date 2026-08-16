@@ -81,6 +81,10 @@ def ask_agent(message, ai_mode="expert", chat_model="advanced", reasoning_effort
     - a truncated response, whether the agent cut out on its own or we cut it
     off at the deadline.
 
+    `ai_mode` must be "expert" or "instant" - the endpoint validates it and
+    422s on anything else. "instant" is what the product calls **fast** mode;
+    sending the word "fast" is one of the things it rejects.
+
     `timed_out` is True when `deadline_seconds` of wall clock elapsed before
     message_complete. The connection is dropped at that point and any text
     received so far is returned, so a hung prompt costs one deadline rather

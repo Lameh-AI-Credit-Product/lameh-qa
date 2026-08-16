@@ -61,10 +61,9 @@ class BasePage:
     # point/transition state); the active one has "opacity: 1;" inline
     # while the others fade to 0.
     #
-    # No currently-enabled scenario clicks a value cell - these are here
-    # for the chart_load / sector_analysis_value_load scenarios kept in
-    # `old/`, which are the reason the helper is shared rather than
-    # per-page.
+    # Used by the first_pointer_load_s scenario on AnalysisPage, and by the
+    # chart_load / sector_analysis_value_load scenarios kept in `old/` -
+    # which is why the helper lives here rather than on one page.
     ACTIVE_VALUE_OVERLAY = 'div.pointer-overlay-transition[style*="opacity: 1;"]'
 
     def __init__(self, page: Page):
@@ -142,10 +141,14 @@ class BasePage:
         if previous_style is None:
             expect(self.locator(self.ACTIVE_VALUE_OVERLAY).first).to_be_visible(timeout=timeout)
         else:
+            # querySelectorAll, not querySelector: the new overlay can be
+            # appended *after* the old one, and the first match in document
+            # order is then the stale element whose style never changes -
+            # a wait that times out after the app had in fact responded.
             self.page.wait_for_function(
                 """(prevStyle) => {
-                    const el = document.querySelector('div.pointer-overlay-transition[style*="opacity: 1;"]');
-                    return el && el.getAttribute('style') !== prevStyle;
+                    const els = document.querySelectorAll('div.pointer-overlay-transition[style*="opacity: 1;"]');
+                    return [...els].some(el => el.getAttribute('style') !== prevStyle);
                 }""",
                 arg=previous_style,
                 timeout=timeout,
@@ -246,6 +249,39 @@ class AnalysisPage(BasePage):
 
     COMPANY_NAME = 'xpath=//*[@id="split-container"]/div/div[1]/div[1]/div[1]/h1'
 
+    # The first table cell on the page that holds a value: the Income
+    # Statement's first data row, second <td> (the first holds the row
+    # label, the rest are the later periods).
+    #
+    # Rows carry the app's own composite id, "<statement>.<section>.<row>"
+    # - semantic rather than a DOM position, so it survives layout
+    # changes. But the row name is *data*: the first row is "Revenue" for
+    # Saudi Arabian Mining Co. and "Sales" for others, so an id pinned to
+    # one company's spelling does not generalise, and this suite is
+    # supposed to measure the same work on every deployment.
+    #
+    # Hence the structural first candidate. Two details in it are
+    # load-bearing, both confirmed against the live UAT DOM:
+    #
+    #   - `td[2]/div` excludes the section header row, whose id is the
+    #     same minus the row suffix ("...and all rows above it") and whose
+    #     five <td>s are entirely empty. It sorts first in document order,
+    #     so an unguarded [1] selects it and then waits out the full
+    #     timeout on a cell that will never have content.
+    #   - the value sits three <div>s deep inside the <td>; the label
+    #     column is only two deep, which is a second reason not to take
+    #     td[1].
+    FIRST_VALUE_CELL = [
+        lambda page: page.locator(
+            'xpath=(//tr[starts-with(@id, "Income Statement.") and td[2]/div])[1]'
+            '/td[2]/div/div/div'),
+        # The originally-reported form, kept as a last resort: an exact id
+        # for a company whose first row is "Sales".
+        lambda page: page.locator(
+            'xpath=//*[@id="Income Statement.Net Profit/Loss for the period '
+            'and all rows above it.Sales"]/td[2]/div/div/div'),
+    ]
+
     def wait_for_navigation(self):
         self.page.wait_for_url(self.URL_PATTERN, timeout=DEFAULT_TIMEOUT_MS)
 
@@ -254,6 +290,82 @@ class AnalysisPage(BasePage):
 
     def get_company_name(self) -> str:
         return self.locator(self.COMPANY_NAME).inner_text().strip()
+
+    # Reveals the source-document pane beside the table. The pointer
+    # overlay is drawn over that document, so nothing highlights while it
+    # is shut - on a closed page no `.pointer-overlay-transition` element
+    # exists in the DOM at all, and clicking a value cell does nothing
+    # visible (confirmed against UAT).
+    #
+    # Do not expect to *see* the highlight while a run goes past. It is a
+    # ~104x9px sliver drawn at the document's own scale, often right at
+    # the edge of the pane's viewport, and it is gone the moment the run
+    # moves on. On UAT it measured as a real element - opacity 1, z-index
+    # 1000, green border, `title="<value> (Click to copy)"` - while being
+    # easy to miss on screen entirely. Check the DOM, not your eyes.
+    SPLIT_SCREEN_BUTTON = 'button:has-text("Open Split Screen")'
+
+    # The pane fetches and renders the source statement, and the overlay
+    # only lands once that is up - slower than a DOM interaction, so it
+    # gets its own budget instead of the default. A healthy UAT run took
+    # 59s, so this is roughly 3x headroom; anything near it is the pane,
+    # not the pointer.
+    POINTER_TIMEOUT_MS = 180_000
+
+    def wait_for_first_value_cell(self):
+        """The first value cell, once it is on screen and clickable.
+
+        The panel being visible (wait_until_loaded) does not mean the
+        statement tables have rendered their numbers, so this is a real
+        wait, not a lookup. Callers that time the click should do this
+        first, outside the timer.
+        """
+        return self.wait_first("analysis_first_value_cell", self.FIRST_VALUE_CELL)
+
+    def open_split_screen(self):
+        """Open the source-document pane, unless it is already open.
+
+        Each run navigates to a fresh analysis page where the pane starts
+        shut, so the guard is for the case where that stops holding
+        rather than for normal operation. A button that isn't there is
+        left to the overlay wait to report - it has the better error.
+        """
+        button = self.locator(self.SPLIT_SCREEN_BUTTON)
+        if button.count():
+            button.first.click()
+
+    def click_value_and_wait_for_overlay(self, cell, previous_style=None,
+                                         timeout_ms=None):
+        """Click a value cell, wait for its highlight in the document pane.
+
+        One retry, for the reason open_first_card_analysis has one: the
+        pane can still be rendering when the click lands, and a click that
+        arrives too early is swallowed in silence - Playwright reports a
+        successful click on a live element and nothing happens. The cost
+        lands inside the measured window, so it says when it happens.
+
+        Both attempts get the *full* budget rather than half each. Halving
+        it bounds a failing scenario, but it also turns a slow-but-working
+        pane into a retry: the first UAT run measured 59.1s against a 60s
+        half-budget, and a second of drift would have produced a wasted
+        click, a note, and a number inflated past the timeout instead of
+        the honest 59s. Bounding the failure case is not worth corrupting
+        the measurement - a genuine failure now costs 2x this timeout.
+        """
+        timeout_ms = timeout_ms or self.POINTER_TIMEOUT_MS
+        for attempt in (1, 2):
+            cell.click()
+            try:
+                return self.wait_for_value_overlay(previous_style,
+                                                   timeout=timeout_ms)
+            # A plain visibility wait raises AssertionError rather than
+            # Playwright's own timeout - both mean "no overlay yet".
+            except (PlaywrightTimeoutError, AssertionError):
+                if attempt == 2:
+                    raise
+                print("  note: no pointer overlay after clicking the value cell, "
+                      "retrying once (this run's first_pointer_load_s includes "
+                      "the wasted wait)")
 
 
 class SectorAnalysisPage(BasePage):

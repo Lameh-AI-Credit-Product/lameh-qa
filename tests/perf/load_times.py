@@ -16,11 +16,20 @@ left the browser):
                                visible on the resulting /company/{id}
                                page. The search that isolates that card is
                                setup, and runs before the timer.
-  3. sector_analysis_load_s  - opening Sector Analysis from the sidebar
+  3. first_pointer_load_s    - on that same analysis page, opening the
+                               split screen and clicking the first table
+                               cell holding a value (the Income
+                               Statement's first data row) until that
+                               figure is highlighted in the source
+                               document beside it. Covers the document
+                               pane loading as well as the pointer
+                               itself. Locating the cell is setup and
+                               runs before the timer.
+  4. sector_analysis_load_s  - opening Sector Analysis from the sidebar
                                until its saved-analyses list has real text
                                in it (it renders as a skeleton while
                                loading).
-  4. sector_analysis_build_s - clicking Build Now at the end of the "New
+  5. sector_analysis_build_s - clicking Build Now at the end of the "New
                                Analysis" wizard until the result table is
                                visible. The wizard - companies, then a few
                                ratios from the Ratio tab - runs *before*
@@ -28,9 +37,10 @@ left the browser):
                                measured.
 
 Login uses OTP, entered by hand: the script opens a real browser window and
-waits for you to press Enter, before any timer starts. Every execution gets
-a fresh browser context, so nothing (cookies, cache, storage) carries over
-between runs of the script.
+waits for you to press Enter, before any timer starts. With no terminal to
+press Enter on it waits for the app itself to show you as logged in
+instead - see await_login. Every execution gets a fresh browser context, so
+nothing (cookies, cache, storage) carries over between runs of the script.
 
 A scenario failure does not stop the test. A full-page screenshot is saved,
 the metric is recorded as "F" for that run, and the remaining scenarios and
@@ -99,6 +109,10 @@ except ImportError:  # optional - fall back to the real environment
 BASE_URL = os.environ.get("BASE_URL", "https://frontend-dev-36462279645.me-central2.run.app")
 
 HEADLESS = False  # OTP login needs a visible window
+
+# How long the login step gets when there is no terminal to press Enter
+# on - long enough to wait for an SMS and type it. See await_login.
+LOGIN_TIMEOUT_MS = 300_000
 
 # Fixed inputs for the "New Analysis" wizard.
 #
@@ -180,6 +194,38 @@ class RunContext:
     base_url: str
 
 
+def await_login(page):
+    """Block until the OTP login has gone through.
+
+    Interactively that is "press Enter when you're done", which is the
+    clearest signal there is - a human saying so. But `input()` needs a
+    terminal, and with none attached (run from a tool, an editor, CI) it
+    reads EOF instantly and takes the whole session down before the
+    browser has even been touched.
+
+    The fallback is the check that already followed it: the sidebar link
+    only renders once authenticated, so waiting for it detects the same
+    event without anyone confirming it. The window is still visible and
+    the login is still done by hand - there is just nothing to press
+    Enter on, and a longer budget because the wait now covers reading an
+    SMS rather than clicking through an app that is already up.
+
+    Either way this sits outside every timer.
+    """
+    try:
+        input("Complete OTP login in the browser window, "
+              "then press Enter here to continue...")
+        timeout = DEFAULT_TIMEOUT_MS
+    except EOFError:
+        timeout = LOGIN_TIMEOUT_MS
+        print(f"\nNo terminal attached, so nothing to press Enter on: complete "
+              f"the OTP login in the browser window and the run continues by "
+              f"itself (waiting up to {LOGIN_TIMEOUT_MS // 60_000} minutes).",
+              flush=True)
+    page.get_by_role("link", name="Sector Analysis").wait_for(
+        state="visible", timeout=timeout)
+
+
 @contextmanager
 def start_session(base_url):
     """A logged-in browser session, yielding (page, pages).
@@ -197,10 +243,7 @@ def start_session(base_url):
         page = context.new_page()
         try:
             page.goto(f"{base_url.rstrip('/')}/login")
-            input("Complete OTP login in the browser window, "
-                  "then press Enter here to continue...")
-            page.get_by_role("link", name="Sector Analysis").wait_for(
-                state="visible", timeout=DEFAULT_TIMEOUT_MS)
+            await_login(page)
 
             yield page, Pages(
                 dashboard=DashboardPage(page, base_url),
@@ -234,6 +277,37 @@ def scenario_analysis_load(pages, page, ctx):
     return {"analysis_load_s": t.elapsed}
 
 
+def scenario_first_pointer_load(pages, page, ctx):
+    """Time a value in the table through to its highlight in the source.
+
+    Runs on the /company/{id} page the previous scenario left open.
+    Locating the cell is setup and sits before the timer - the statement
+    tables can still be rendering when the panel is already visible, and
+    that wait is page load, which analysis_load_s already covers.
+
+    Everything after that is measured: opening the split screen, the
+    source document rendering in it, the click on the first value cell,
+    and the highlight overlay reaching "opacity: 1". So this is not a
+    pointer latency in isolation - it is dominated by the document pane
+    coming up, and it moves when either that or the pointer changes.
+    Splitting the two would mean timing the pane separately; the whole
+    sequence is what a user waits through to see a figure sourced.
+
+    The overlay's style is captured beforehand and passed through: each
+    run navigates to the page afresh so there is normally nothing there
+    (previous is None, and the wait is a plain visibility wait), but if an
+    overlay does survive, waiting for the style to *change* is what stops
+    a stale one being read as this click's response.
+    """
+    cell = pages.analysis.wait_for_first_value_cell()
+    previous = pages.analysis.get_active_value_overlay_style()
+
+    with Timer() as t:
+        pages.analysis.open_split_screen()
+        pages.analysis.click_value_and_wait_for_overlay(cell, previous)
+    return {"first_pointer_load_s": t.elapsed}
+
+
 def scenario_sector_analysis_load(pages, page, ctx):
     with Timer() as t:
         pages.sector.open()
@@ -259,12 +333,14 @@ def scenario_sector_analysis_build(pages, page, ctx):
 
 # Run in order, and the order is load-bearing: the dashboard must be up
 # before its search bar and card button exist, the analysis page before
-# its panel, and the sector list before "New Analysis" can be clicked. The
-# build leaves the browser on the freshly built analysis - the next run's
-# dashboard scenario navigates back to "/" itself.
+# its panel and before there is a table cell to click, and the sector list
+# before "New Analysis" can be clicked. The build leaves the browser on the
+# freshly built analysis - the next run's dashboard scenario navigates back
+# to "/" itself.
 SCENARIOS = [
     ("dashboard_load_s", scenario_dashboard_load),
     ("analysis_load_s", scenario_analysis_load),
+    ("first_pointer_load_s", scenario_first_pointer_load),
     ("sector_analysis_load_s", scenario_sector_analysis_load),
     ("sector_analysis_build_s", scenario_sector_analysis_build),
 ]

@@ -177,7 +177,7 @@ with a reason recorded in `config.py`.
 `chart-builder/chart-data/batch`, the same DB the agent's own tools read, so
 ratios come back pre-computed (`section: "Financial Ratios"`) alongside raw
 line items (`"Income Statement"` / `"Balance Sheet"` / `"Cash Flow Statement"`).
-Note it uses a *different* organization-id from the agent conversations.
+Note it uses its own organization-id (`LAMEH_CHART_DATA_ORGANIZATION_ID`), separate from the one the agent is called as — see [the umbrella doc](../AGENT.md#the-organization-ids).
 
 - It is **live**, not a fixture. A restatement in the DB moves the score
   without the agent changing. A drop isn't automatically a regression.

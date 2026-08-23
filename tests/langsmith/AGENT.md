@@ -201,19 +201,34 @@ sits beside a suite's `prompt_set.json`, its per-example entries become the
 LangSmith examples' reference outputs. No suite branching, and the FS suite
 simply has no such file.
 
-## Ground truth uses a different organization-id from the agent
+## The organization-ids
 
-Both suites do this, and it is load-bearing in both. The agent conversations
-run under `LAMEH_ORGANIZATION_ID`; ground truth runs under a shared/public org
-(`00000000-0000-0000-0000-000000000000` by default).
+Three variables, all read only by these suites:
 
-For the research suite this is not a formality — the two orgs return
-**genuinely different data**. Confirmed 2026-08-23 on Yamama Cement: the agent
-org returned `merge_run_id 0310adad…` with 347 tables, the shared org
+| variable | used for | default |
+|---|---|---|
+| `LAMEH_ORGANIZATION_ID_FOR_INTELLIGENCE_EVAL` | the org the agent is called as, on `/v0/chat` | none |
+| `LAMEH_CHART_DATA_ORGANIZATION_ID` | FS ground truth (`chart-data/batch`) and the sector roster | `00000000-…-000000000000` |
+| `LAMEH_BOARD_ANALYSIS_ORGANIZATION_ID` | board-analysis ground truth — only when freezing the snapshot or checking drift | `00000000-…-000000000000` |
+
+The first has its own name rather than sharing the repo-wide
+`LAMEH_ORGANIZATION_ID` because the suites were its only reader: a dedicated
+variable means the eval's org can move without touching anything else, and a
+reader of `.env` can tell which variable affects which tool.
+
+**They are separate knobs even when they hold the same value**, which they
+currently do. "Which org the agent runs as" and "which org holds the data we
+grade against" are different questions, and collapsing them would mean
+repointing the agent silently repoints the ground truth too.
+
+The distinction is load-bearing for the research suite: the two orgs return
+**genuinely different data**. Confirmed 2026-08-23 on Yamama Cement — one org
+returned `merge_run_id 0310adad…` with 347 tables, the shared org
 `d4607628…` with 367 tables, a re-cut section taxonomy, an extra fiscal year,
-and cell values typed as strings rather than floats. The research prompt set
-was verified against the shared org's run. Pointing it at the other one fails
-silently, grading against a payload where several planted defects don't exist.
+and cell values typed as strings rather than floats. The prompt set and the
+frozen snapshot were both built from the shared org's run. Pointing the
+board-analysis variable elsewhere fails silently, grading against a payload
+where several planted defects do not exist.
 
 ## Conventions
 

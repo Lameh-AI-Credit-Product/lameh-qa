@@ -65,17 +65,23 @@ def prefix(ai_mode):
 BOARD_ANALYSIS_URL = (f"{ORCHESTRATOR_URL}/v0/board-analysis/merge/tables"
                       if ORCHESTRATOR_URL else None)
 
-# A *different* organization-id from the agent conversations, exactly as the FS
-# suite's chart-data ground truth uses one. This is not incidental: the two orgs
-# return genuinely different merge runs for the same company. Confirmed
-# 2026-08-23 - the agent org returned merge_run_id 0310adad... with 347 tables,
-# the shared org d4607628... with 367 tables, a re-cut section taxonomy, an
-# extra fiscal year (2025), and cell values typed as strings rather than floats.
+# Its own organization-id, separate from the one the agent is called as
+# (LAMEH_ORGANIZATION_ID_FOR_INTELLIGENCE_EVAL) even though both currently hold
+# the same value - see ../AGENT.md on why they stay separate knobs.
 #
-# The prompt set's expected facts and trap locators were all verified against
-# the shared org's run. Pointing this at the agent org would not fail loudly -
-# it would silently grade against a payload where several planted defects do
-# not exist.
+# The separation is not incidental here: the two orgs return genuinely
+# different merge runs for the same company. Confirmed 2026-08-23 - one org
+# returned merge_run_id 0310adad... with 347 tables, the shared org
+# d4607628... with 367 tables, a re-cut section taxonomy, an extra fiscal year
+# (2025), and cell values typed as strings rather than floats.
+#
+# The prompt set's expected facts, its trap locators and the frozen snapshot
+# were all built from the shared org's run. Pointing this elsewhere would not
+# fail loudly - it would silently grade against a payload where several
+# planted defects do not exist.
+#
+# Read only by freeze_ground_truth.py (refresh and drift check); grading uses
+# the committed snapshot.
 BOARD_ANALYSIS_ORGANIZATION_ID = os.environ.get("LAMEH_BOARD_ANALYSIS_ORGANIZATION_ID",
                                                  "00000000-0000-0000-0000-000000000000")
 

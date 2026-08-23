@@ -91,8 +91,15 @@ def experiment_prefix(suite, ai_mode):
 # Shared: both suites talk to the same /v0/chat endpoint with the same
 # credentials. Only their *ground truth* sources differ, and those live in the
 # suite configs.
+#
+# The org id comes from LAMEH_ORGANIZATION_ID_FOR_INTELLIGENCE_EVAL, which is
+# the eval suite's own variable rather than the repo-wide LAMEH_ORGANIZATION_ID
+# it used to read. The suites are the only thing that ever read that one, and
+# giving them a dedicated name means the org the eval runs as can be changed
+# without touching anything else - and that a reader of .env can tell which
+# variable affects which tool.
 ORCHESTRATOR_URL = os.environ.get("LAMEH_ORCHESTRATOR_URL")
-ORCHESTRATOR_ORGANIZATION_ID = os.environ.get("LAMEH_ORGANIZATION_ID")
+ORCHESTRATOR_ORGANIZATION_ID = os.environ.get("LAMEH_ORGANIZATION_ID_FOR_INTELLIGENCE_EVAL")
 ORCHESTRATOR_API_KEY = os.environ.get("LAMEH_API_KEY")
 ORCHESTRATOR_USER_ID = os.environ.get("LAMEH_USER_ID")
 

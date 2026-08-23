@@ -158,4 +158,4 @@ poetry run poe langsmith-fs-report       --experiment UAT-intelligence-fs-expert
 poetry run poe langsmith-research-report --experiment UAT-intelligence-research-instant-d01438a5
 ```
 
-Written by default to `results/langsmith/<experiment>.md` (gitignored) — aggregates each dimension (pass rates, or mean seconds for response time) against that suite's thresholds, with every example linking to its LangSmith trace and orchestrator conversation thread. The header records the AI mode and concurrency the run used. The breakdown tables differ per suite: FS slices by sector and prompt type, research by prompt type and by the *kind* of data defect each prompt plants.
+Written by default to `results/langsmith/fs/<experiment>.md` or `results/langsmith/research/<experiment>.md` (gitignored) — aggregates each dimension against that suite's thresholds, with every example linking to its LangSmith trace and orchestrator conversation thread. The header records the AI mode and concurrency the run used. The breakdown tables differ per suite: FS slices by sector and prompt type, research by prompt type and by the *kind* of data defect each prompt plants.

@@ -292,7 +292,7 @@ def main():
                           "answer_coverage failed. Pass 0 to wait indefinitely.")
     ap.add_argument("--report-out", default=None,
                      help="Where to write the markdown report. Defaults to "
-                          "results/langsmith/<experiment>.md")
+                          "results/langsmith/research/<experiment>.md")
     ap.add_argument("--skip-report", action="store_true",
                      help="Only run the experiment; don't build the markdown report afterwards.")
     ap.add_argument("--skip-drift-check", action="store_true",

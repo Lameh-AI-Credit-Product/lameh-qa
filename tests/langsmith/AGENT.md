@@ -32,7 +32,7 @@ Both `run` tasks take `--ai-mode expert|instant` (`fast` is an alias for
 do: FS sector prompts take 7–10 minutes each, research prompts answered in
 135s on the 2026-08-23 probe, so the deadlines are 900s and 300s respectively.
 
-Reports land in `results/langsmith/<experiment>.md`, which is gitignored.
+Reports land in `results/langsmith/<suite>/<experiment>.md` (`fs/` or `research/`), which is gitignored.
 
 ## Layout
 

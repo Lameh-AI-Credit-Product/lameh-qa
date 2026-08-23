@@ -291,10 +291,16 @@ def build_report(spec, experiment_name, client=None):
                             fetch_latency(experiment_name, client=client))
 
 
-def default_out_path(experiment_name):
+def default_out_path(spec, experiment_name):
+    """results/langsmith/<suite>/<experiment>.md.
+
+    Split per suite rather than pooled: an experiment name already carries its
+    suite, but a flat directory mixes two sets of reports whose columns and
+    gates have almost nothing in common, and the pair is only going to grow.
+    """
     # .../tests/langsmith/shared/report/build_report.py -> repo root is five up.
     repo_root = Path(__file__).resolve().parents[4]
-    return repo_root / "results" / "langsmith" / f"{experiment_name}.md"
+    return repo_root / "results" / "langsmith" / spec.name / f"{experiment_name}.md"
 
 
 def missing_feedback(spec, rows, expected_example_count=None):
@@ -335,7 +341,7 @@ def write_report(spec, experiment_name, out=None, client=None, expected_example_
     report_md = render_markdown(spec, experiment_name, rows, aggregates,
                                  apply_thresholds(spec, aggregates["overall"]),
                                  fetch_latency(experiment_name, client=client))
-    out_path = Path(out) if out else default_out_path(experiment_name)
+    out_path = Path(out) if out else default_out_path(spec, experiment_name)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(report_md, encoding="utf-8")
     return out_path
@@ -348,7 +354,9 @@ def main():
                           "examples are looked up in and the evaluator columns rendered.")
     ap.add_argument("--experiment", required=True,
                      help="LangSmith experiment name, e.g. UAT-intelligence-fs-expert-3a94b70b")
-    ap.add_argument("--out", default=None, help="Output markdown file path. Defaults to reports/<experiment>.md")
+    ap.add_argument("--out", default=None,
+                     help="Output markdown file path. Defaults to "
+                          "results/langsmith/<suite>/<experiment>.md")
     args = ap.parse_args()
 
     print(f"Report written to {write_report(load_suite(args.suite), args.experiment, out=args.out)}")

@@ -78,7 +78,7 @@ Only expert mode has been run as a full experiment; everything under "Known
 state" below predates fast mode entirely, and no claim there has been checked
 against it.
 
-Reports land in `results/langsmith/<experiment>.md`, which is gitignored.
+Reports land in `results/langsmith/fs/<experiment>.md`, which is gitignored.
 
 ## Pipeline
 

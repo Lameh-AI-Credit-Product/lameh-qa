@@ -42,7 +42,7 @@ company=None and are skipped by numeric_comparison. They are no longer
 invisible when that happens - tag_completeness charges for exactly this.
 
 Once the experiment finishes, the markdown production-readiness report is
-built automatically from it (results/langsmith/<experiment>.md) - pass
+built automatically from it (results/langsmith/fs/<experiment>.md) - pass
 --skip-report to only run the experiment.
 
 The agent answers in one of two modes, `--ai-mode expert` (the default) or
@@ -430,7 +430,8 @@ def main():
                           f"cut off and scored on whatever text arrived, with answer_coverage failed as "
                           f"truncated. Pass 0 to wait indefinitely.")
     ap.add_argument("--report-out", default=None,
-                     help="Where to write the markdown report. Defaults to results/langsmith/<experiment>.md")
+                     help="Where to write the markdown report. Defaults to "
+                          "results/langsmith/fs/<experiment>.md")
     ap.add_argument("--skip-report", action="store_true",
                      help="Only run the experiment; don't build the markdown report afterwards.")
     args = ap.parse_args()

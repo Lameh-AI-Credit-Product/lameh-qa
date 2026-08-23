@@ -211,10 +211,11 @@ Three variables, all read only by these suites:
 | `LAMEH_CHART_DATA_ORGANIZATION_ID` | FS ground truth (`chart-data/batch`) and the sector roster | `00000000-…-000000000000` |
 | `LAMEH_BOARD_ANALYSIS_ORGANIZATION_ID` | board-analysis ground truth — only when freezing the snapshot or checking drift | `00000000-…-000000000000` |
 
-The first has its own name rather than sharing the repo-wide
-`LAMEH_ORGANIZATION_ID` because the suites were its only reader: a dedicated
-variable means the eval's org can move without touching anything else, and a
-reader of `.env` can tell which variable affects which tool.
+Each is named for what reads it. The first replaced a generic repo-wide
+variable that nothing outside these suites turned out to consult, and which
+has since been deleted: naming a variable for its consumer means the eval's
+org can move without touching anything else, and a reader of `.env` can tell
+which variable affects which tool.
 
 **They are separate knobs even when they hold the same value**, which they
 currently do. "Which org the agent runs as" and "which org holds the data we

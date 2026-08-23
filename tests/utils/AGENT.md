@@ -57,7 +57,7 @@ readmits about a dozen private test uploads ("microsof", "tawina test",
 "test prospectus") that carry no `reference` to use as an id.
 
 The same endpoint backs the LangSmith suite's sector rosters
-(`tests/langsmith/evaluators/ground_truth.py`), filtered slightly differently
+(`tests/langsmith/fs/evaluators/ground_truth.py`), filtered slightly differently
 — they are separate call sites on purpose, and neither imports the other.
 
 ## `nuke_charts.py` — read before you type

@@ -17,8 +17,9 @@
 > download script's ratio labels: it parses them out of the download script's
 > source, so it depends on that file's path as well as its shape.
 >
-> The LangSmith eval suite for the Intelligence agent is unrelated to all of
-> this and is documented in [`tests/langsmith/AGENT.md`](tests/langsmith/AGENT.md).
+> The LangSmith eval suites for the Intelligence agent are unrelated to all of
+> this and are documented in [`tests/langsmith/AGENT.md`](tests/langsmith/AGENT.md)
+> (financial statements in `fs/`, board analysis in `research/`).
 
 This file documents `sector_analysis_ratios.py` for future agent sessions. It
 is **standalone** — it imports nothing from the rest of the repo and can be

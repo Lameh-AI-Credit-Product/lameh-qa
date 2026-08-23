@@ -22,10 +22,10 @@ Nine evaluators in three families:
     all_values_tagged      figures stated with no provenance tag at all
     (answer_coverage also consumes a judged metric-coverage verdict)
 
-  measured
-    response_time_seconds  how long the answer took, in seconds - scored as
-                           the raw measurement, lower being better, which is
-                           true of nothing else here
+Response time is deliberately NOT an evaluator: LangSmith already records
+per-run latency (matching our own stream timing to 0.1s) and exposes
+latency_p50/p99 on the experiment, which build_report reads. See the retired
+note in config.py.
 
 The deterministic pair (tag_completeness) and judged pair (all_values_tagged)
 are two halves of one question - "can a reader verify this figure?". The
@@ -53,8 +53,8 @@ config.AI_MODES.
 
 Usage
 -----
-    poetry run python tests/langsmith/run_eval.py
-    poetry run python tests/langsmith/run_eval.py --ai-mode fast
+    poetry run python tests/langsmith/fs/run_eval.py
+    poetry run python tests/langsmith/fs/run_eval.py --ai-mode fast
 """
 
 import argparse
@@ -65,17 +65,21 @@ from pathlib import Path
 from langsmith import Client
 from langsmith.evaluation import evaluate
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent / "evaluators"))
-sys.path.insert(0, str(Path(__file__).resolve().parent / "report"))
+_HERE = Path(__file__).resolve().parent
+_SHARED = _HERE.parent / "shared"
+sys.path.insert(0, str(_SHARED / "report"))
+sys.path.insert(0, str(_SHARED))
+sys.path.insert(0, str(_HERE))
+sys.path.insert(0, str(_HERE / "evaluators"))
 import comment_format as fmt  # noqa: E402
 from agent_client import DEFAULT_DEADLINE_SECONDS, ask_agent  # noqa: E402
 from build_report import write_report  # noqa: E402
-from config import (AI_MODE_ALIASES, AI_MODES, ALL_VALUES_TAGGED, ANSWER_COVERAGE,  # noqa: E402
-                     ANSWER_QUALITY, COMPANY_COVERAGE, DATASET_NAME, DEFAULT_AI_MODE,
-                     LANGSMITH_PROJECT, NO_FABRICATED_COMPANIES, NUMERIC_ACCURACY,
-                     RESPONSE_TIME, SECURITY, TAG_COMPLETENESS, experiment_prefix,
-                     normalize_ai_mode)
+from config import (ALL_VALUES_TAGGED, ANSWER_COVERAGE, ANSWER_QUALITY,  # noqa: E402
+                     COMPANY_COVERAGE, DATASET_NAME, NO_FABRICATED_COMPANIES,
+                     NUMERIC_ACCURACY, REPORT_SPEC, SECURITY,
+                     TAG_COMPLETENESS, prefix)
+from env_config import (AI_MODE_ALIASES, AI_MODES, DEFAULT_AI_MODE,  # noqa: E402
+                            LANGSMITH_PROJECT, normalize_ai_mode)
 from correctness import (company_coverage, grounding_check, numeric_comparison,  # noqa: E402
                           ops_component_comparison)
 from extraction import extract_all, extract_tags  # noqa: E402
@@ -110,11 +114,11 @@ _agent_deadline_seconds = DEFAULT_DEADLINE_SECONDS
 # config.AI_MODES for why it's not a dataset field.
 _agent_mode = DEFAULT_AI_MODE
 
-# Recorded per run purely so response_time_seconds can be read honestly later:
-# at the default concurrency every prompt is in flight at once, so the timings
-# describe the orchestrator under N-way load, not the mode on its own. They
-# compare fairly against another run at the same concurrency and mean little
-# as absolutes, and the report can only say so if it knows the number.
+# Recorded per run so the report can state the load its latency percentiles
+# were measured under: at the default concurrency every prompt is in flight at
+# once, so timings describe the orchestrator under N-way load, not the mode on
+# its own. They compare fairly against another run at the same concurrency and
+# mean little as absolutes.
 _max_concurrency = DEFAULT_MAX_CONCURRENCY
 
 
@@ -387,34 +391,6 @@ def all_values_tagged_evaluator(run, example):
     }
 
 
-def response_time_evaluator(run, example):
-    """How long the agent took to answer, in seconds.
-
-    Not a rate and not a verdict: the score *is* the measurement, because the
-    question it answers ("how much time does fast mode actually save?") wants
-    a distribution rather than a pass mark. That makes it the one key where
-    lower is better and the one the report renders as `s` instead of `%` -
-    see config.RESPONSE_TIME, and keep it out of build_report.GATED_KEYS
-    until there's a per-mode budget worth enforcing.
-
-    A timed-out run still scores. Its elapsed time is a real lower bound and
-    dropping it would quietly flatter the mean by deleting exactly the slowest
-    prompts; the comment marks it so nobody reads it as a completed answer."""
-    outputs = run.outputs or {}
-    elapsed = outputs.get("elapsed_seconds")
-    if elapsed is None:
-        return {"key": RESPONSE_TIME, "score": None,
-                "comment": fmt.response_time_unmeasured()}
-    return {
-        "key": RESPONSE_TIME,
-        "score": elapsed,
-        "comment": fmt.response_time(elapsed, outputs.get("ai_mode"),
-                                      outputs.get("max_concurrency"),
-                                      timed_out=outputs.get("timed_out", False),
-                                      completed=outputs.get("completed", True)),
-    }
-
-
 def _select_examples(example_id):
     """All examples in the dataset, or just the one whose prompt_set.json
     `id` matches --example-id (e.g. "materials-q1-cash-quality") - useful for
@@ -473,9 +449,8 @@ def main():
         evaluators=[numeric_accuracy_evaluator, tag_completeness_evaluator,
                     company_coverage_evaluator, no_fabricated_companies_evaluator,
                     answer_coverage_evaluator, answer_quality_evaluator,
-                    security_evaluator, all_values_tagged_evaluator,
-                    response_time_evaluator],
-        experiment_prefix=experiment_prefix(args.ai_mode),
+                    security_evaluator, all_values_tagged_evaluator],
+        experiment_prefix=prefix(args.ai_mode),
         metadata={"suite": "lameh-intelligence-eval", "ai_mode": args.ai_mode,
                   "max_concurrency": args.max_concurrency},
         max_concurrency=args.max_concurrency,
@@ -483,7 +458,8 @@ def main():
     print(f"Done - check the '{LANGSMITH_PROJECT}' project in the LangSmith dashboard.")
 
     if args.skip_report:
-        print(f"Report skipped. Build it later with: poetry run poe langsmith-report --experiment {results.experiment_name}")
+        print("Report skipped. Build it later with: "
+              f"poetry run poe langsmith-fs-report --experiment {results.experiment_name}")
         return
 
     _build_report_for(results.experiment_name, args.report_out, expected_example_count=len(examples))
@@ -498,6 +474,7 @@ def _build_report_for(experiment_name, report_out, expected_example_count):
     print(f"Building report for {experiment_name} ({expected_example_count} examples) ...")
     try:
         out_path = write_report(
+            REPORT_SPEC,
             experiment_name,
             out=report_out,
             expected_example_count=expected_example_count,
@@ -508,7 +485,7 @@ def _build_report_for(experiment_name, report_out, expected_example_count):
     except Exception as exc:  # noqa: BLE001 - the experiment itself already succeeded
         print(f"Report generation failed ({exc}).")
         print(f"The experiment itself is fine - retry with: "
-              f"poetry run poe langsmith-report --experiment {experiment_name}")
+              f"poetry run poe langsmith-fs-report --experiment {experiment_name}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,182 @@
+[
+  {
+    "id": "yamama-board-attendance",
+    "company": "Yamama Cement",
+    "company_ar": "شركة أسمنت اليمامة",
+    "prompt_type": "governance-roster",
+    "scope": "company",
+    "fiscal_years": ["2025"],
+    "facts_expected": [
+      "four board meetings held in 2025 (2025-02-18, 2025-04-22, 2025-10-20, 2025-12-16)",
+      "Prince Nayef bin Sultan bin Mohammed bin Saud Al-Kabeer is Chairman",
+      "Engineer Abdullah bin Abdulrahman Al-Obeikan is Deputy Chairman",
+      "Fahd bin Thunayan Al-Thunayan missed Meeting 4 (2025-12-16)"
+    ],
+    "requires_source_citation": true,
+    "trap_kinds": ["entity_name_variants", "superseded_rows", "absence_vs_ineligibility", "restatement"],
+    "traps": [
+      {
+        "kind": "entity_name_variants",
+        "locator": "Governance & Compliance -> Director service register, Outside-role register, Nomination-panel participation, Director Profile",
+        "detail": "The same director appears under at least seven spellings: 'Mr. Faisal bin Sulaiman Al-Rajhi', 'Eng / Faisal bin Sulaiman Al-Rajhi', 'Eng/ Faisal bin Sulaiman Al-Rajhi', 'Eng./ Faisal bin Sulaiman Al-Rajhi', 'Eng/Faisal bin Sulaiman Al-Rajhi', 'Engineer Faisal bin Sulaiman Al-Rajhi', 'Eng. Faisal bin Solaiman AlRajhi'.",
+        "expect": "Treats them as one person; does not list the same director twice under different spellings."
+      },
+      {
+        "kind": "superseded_rows",
+        "locator": "Governance & Compliance -> Director service register, rows suffixed '(Discontinued)'",
+        "detail": "Rows suffixed '(Discontinued)' carry the prior board term that ended 2024-03-28: Prince Turki bin Abdulaziz bin Turki, Mr. Abdullah bin Mohammed Al-Bahooth, Mr. Nizar Abdulaziz Al-Tuwaijri.",
+        "expect": "Excludes the prior-term directors from the FY2025 roster."
+      },
+      {
+        "kind": "absence_vs_ineligibility",
+        "locator": "Governance & Compliance -> Director service register, Mr. Salman bin Abdul Mohsen Al-Sudairi",
+        "detail": "Shows 'Not recorded (-)' for Meeting 1 (2025-02-18). His Board Appointment Date is 2025-04-15, i.e. after that meeting.",
+        "expect": "Does not count this as a missed meeting. Flagging Al-Sudairi as absent is a failure even if the rest of the roster is right."
+      },
+      {
+        "kind": "restatement",
+        "locator": "Governance & Compliance -> Director service register, Al-Obeikan Classification",
+        "detail": "Al-Obeikan's classification reads 'Independent' for 2023 and 'Non-Executive' for 2024 and 2025.",
+        "expect": "Reports Non-Executive for 2025 rather than the stale 2023 value."
+      }
+    ],
+    "input": "For Yamama Cement (شركة أسمنت اليمامة), list every director on the FY2025 board, their classification (independent / non-executive), and their attendance at each of the four board meetings held during 2025. Flag any director who missed a meeting."
+  },
+  {
+    "id": "yamama-related-party-transactions",
+    "company": "Yamama Cement",
+    "company_ar": "شركة أسمنت اليمامة",
+    "prompt_type": "related-parties",
+    "scope": "company",
+    "fiscal_years": ["2022", "2023", "2024", "2025"],
+    "facts_expected": [
+      "Cement Products Manufacturing Company is the largest counterparty in 2025 at 25,174,000",
+      "Obeikan Digital Solutions activity stops after 2023",
+      "Arabian Shield Cooperative Insurance rises to 18,807,000 in 2025"
+    ],
+    "requires_source_citation": true,
+    "trap_kinds": ["corrupt_value"],
+    "traps": [
+      {
+        "kind": "corrupt_value",
+        "locator": "Equity, Ownership & Related Parties -> Affiliate transaction flow, Yemeni Saudi Company (Yamama owns 20%)",
+        "detail": "The 2024 cell reads 57 while the surrounding years read 199,000 (2022), 343,000 (2023) and 376,000 (2025). The value is implausible by four orders of magnitude against its own neighbours.",
+        "expect": "Questions the 57 as a probable scale or data error rather than reporting a ~99.98% collapse and recovery as fact."
+      }
+    ],
+    "input": "For Yamama Cement (شركة أسمنت اليمامة), show related-party transaction amounts by counterparty for fiscal years 2022 through 2025. Which counterparty had the largest transaction volume in 2025, and did any counterparty's activity stop during the period?"
+  },
+  {
+    "id": "yamama-training-participation",
+    "company": "Yamama Cement",
+    "company_ar": "شركة أسمنت اليمامة",
+    "prompt_type": "workforce-kpi",
+    "scope": "company",
+    "fiscal_years": ["2025"],
+    "facts_expected": [
+      "89% of the workforce benefited from development and empowerment initiatives in 2025"
+    ],
+    "requires_source_citation": true,
+    "trap_kinds": ["unit_inconsistency", "underivable_figure"],
+    "traps": [
+      {
+        "kind": "unit_inconsistency",
+        "locator": "Human Capital Development -> Employee enablement participation",
+        "detail": "Two rows state the same fact at different scales for the same period (2025-12-31_12M): 'Percentage of Beneficiaries out of Total Employees' = 89, and 'Employees benefiting from development and empowerment initiatives' = 0.89.",
+        "expect": "Answers 89%. Reporting '0.89%', or presenting both figures without reconciling them, is a failure."
+      },
+      {
+        "kind": "underivable_figure",
+        "locator": "whole payload",
+        "detail": "No workforce headcount is disclosed anywhere, so the percentage cannot be converted to a number of employees.",
+        "expect": "Does not state an absolute headcount of beneficiaries."
+      }
+    ],
+    "input": "For Yamama Cement (شركة أسمنت اليمامة), what percentage of the workforce benefited from employee development and empowerment initiatives in 2025?"
+  },
+  {
+    "id": "yamama-third-production-line",
+    "company": "Yamama Cement",
+    "company_ar": "شركة أسمنت اليمامة",
+    "prompt_type": "project-status",
+    "scope": "company",
+    "fiscal_years": ["2023", "2024", "2025"],
+    "facts_expected": [
+      "current estimated contract value is SAR 1,000,000,000 as of FY2025",
+      "completion is 97%",
+      "daily clinker capacity is 12,500 tonnes/day",
+      "operations projected to commence Q3 2026"
+    ],
+    "requires_source_citation": true,
+    "trap_kinds": ["restatement", "same_asset_two_names"],
+    "traps": [
+      {
+        "kind": "restatement",
+        "locator": "Strategy & Future Expansion -> Production Line Transition, 'Third Production Line Project ... Estimated contract value'",
+        "detail": "One row, three report vintages: 337,883,000 (2023), 338,000,000 (2024), 1,000,000,000 (2025). These are the same commitment restated, not three contracts.",
+        "expect": "Reports the FY2025 figure as current and calls out the ~3x restatement from 338m; does not sum them or present them as separate projects."
+      },
+      {
+        "kind": "same_asset_two_names",
+        "locator": "Strategy & Future Expansion -> Production Line Transition",
+        "detail": "'Seventh Production Line Relocation and Upgrade' and 'Third Production Line Project' describe the same physical line - the seventh line relocated from the former factory to serve as the third line at the new facility.",
+        "expect": "Does not present them as two distinct projects."
+      }
+    ],
+    "input": "For Yamama Cement (شركة أسمنت اليمامة), what is the contract value of the Third Production Line project, and what is its current status?"
+  },
+  {
+    "id": "yamama-cement-market-forecast",
+    "company": "Yamama Cement",
+    "company_ar": "شركة أسمنت اليمامة",
+    "prompt_type": "market-data",
+    "scope": "company",
+    "fiscal_years": ["2023", "2024", "2025"],
+    "facts_expected": [
+      "expected 2026 total supply is approximately 104 million tonnes clinker equivalent",
+      "the forecast is broadly stable across report years (103.7 in the FY2023 report, 104.3 in the FY2025 report)"
+    ],
+    "requires_source_citation": true,
+    "trap_kinds": ["scale_corruption"],
+    "traps": [
+      {
+        "kind": "scale_corruption",
+        "locator": "Industry & Market Analysis -> Cement Market — 2026 Forecast (Clinker Equivalent), the FY2024 column",
+        "detail": "The entire FY2024-vintage column is stored unscaled: Sum - Supply 107,100,000.0, Exports 47,000,000.0, Demand 60,500,000.0, Actual Production 50,700,000.0, Inventory 9,500,000.0 - against neighbours in the same rows expressed in millions of tonnes (103.7, 12.0, 50.2, 60.5, 41.6). The sibling tables for the 2024/2025/2027/2028 forecasts show the same pattern.",
+        "expect": "Normalises the FY2024 column to million tonnes or flags it as a unit error. Reporting a millionfold jump and collapse in supply is a failure."
+      }
+    ],
+    "input": "Using Yamama Cement's (شركة أسمنت اليمامة) disclosed 2026 forecast for the Saudi cement market on a clinker-equivalent basis, what is expected total supply, and how has that forecast changed across report years?"
+  },
+  {
+    "id": "yamama-safety-metrics",
+    "company": "Yamama Cement",
+    "company_ar": "شركة أسمنت اليمامة",
+    "prompt_type": "disclosure-gap",
+    "scope": "company",
+    "fiscal_years": ["2023", "2024", "2025"],
+    "facts_expected": [
+      "LTIFR is not disclosed for any year",
+      "recordable incident count (TRIR) is not disclosed for any year",
+      "fatalities are not disclosed for any year",
+      "17,500,000 working hours recorded in FY2024 is the only quantitative safety figure disclosed"
+    ],
+    "requires_source_citation": true,
+    "trap_kinds": ["absent_metric", "adjacent_figure_substitution"],
+    "traps": [
+      {
+        "kind": "absent_metric",
+        "locator": "Health, Safety & Environmental Management -> Safety performance indicators",
+        "detail": "No LTIFR, TRIR, recordable-incident count or fatality figure exists for any year. The section holds one quantitative row - 'Working hours recorded (Discontinued)' = 17,500,000 for 2024-12-31_12M - plus a 2025 narrative, 'Safety efforts led to a marked reduction in workplace accidents'.",
+        "expect": "States plainly that LTIFR, recordable incidents and fatalities are not disclosed. Any numeric value for those three is a fabrication."
+      },
+      {
+        "kind": "adjacent_figure_substitution",
+        "locator": "Health, Safety & Environmental Management -> Safety performance indicators",
+        "detail": "Working hours (17.5 million, FY2024) is present and an injury count is not, so an LTIFR cannot be computed. A 2026-08-23 probe answer asserted 'zero serious or disabling injuries' for FY2024 as a cited figure; no such row exists in merge/tables.",
+        "expect": "Does not derive or imply an LTIFR, and does not assert an injury count of zero. Reporting the 17.5m working-hours figure itself is correct and expected."
+      }
+    ],
+    "input": "For Yamama Cement (شركة أسمنت اليمامة), report the company's workplace safety performance: lost-time injury frequency rate (LTIFR), number of recordable incidents, and any fatalities, for fiscal years 2023 through 2025."
+  }
+]

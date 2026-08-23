@@ -1,16 +1,25 @@
 """
 Lameh Intelligence - production-readiness report
 ==================================================
-Reads a completed LangSmith experiment (produced by run_eval.py), aggregates
-evaluator pass rates per dimension (correctness / helpfulness / safety),
-sliced by sector and prompt type, applies configurable threshold gates
-(config.THRESHOLDS), and renders a markdown report. Every example links back
-to its LangSmith run (one-click trace debugging) and, when available, the
-orchestrator's own conversation_id (the agent-side thread).
+Reads a completed LangSmith experiment (produced by a suite's run_eval.py),
+aggregates evaluator pass rates per dimension, slices them by whatever
+metadata that suite groups on, applies its threshold gates, and renders a
+markdown report. Every example links back to its LangSmith run (one-click
+trace debugging) and, when available, the orchestrator's own conversation_id
+(the agent-side thread).
+
+**Every entry point takes a `SuiteSpec`** (shared/suite.py) rather than
+importing evaluator keys at module scope. That indirection is not decoration:
+the two suites share exactly two evaluator keys (`security`,
+`response_time_seconds`), and the FS suite's "By Sector" breakdown is
+meaningless for a research suite whose every row is one company. Teaching one
+report to branch on which suite it was called for would have meant a
+conditional in a dozen formatters; it renders what the spec hands it instead.
 
 Usage
 -----
-    poetry run python tests/langsmith/report/build_report.py --experiment UAT-intelligence-fs-expert-3a94b70b
+    poetry run python tests/langsmith/shared/report/build_report.py --suite fs \
+        --experiment UAT-intelligence-fs-expert-3a94b70b
 """
 
 import argparse
@@ -23,39 +32,38 @@ from pathlib import Path
 from langsmith import Client
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import (ALL_VALUES_TAGGED, ANSWER_COVERAGE, ANSWER_QUALITY, COMPANY_COVERAGE,  # noqa: E402
-                     DATASET_NAME, EVALUATOR_KEYS, NO_FABRICATED_COMPANIES, NUMERIC_ACCURACY,
-                     RESPONSE_TIME, SECURITY, TAG_COMPLETENESS, THRESHOLDS)
-
-DIMENSION_KEYS = EVALUATOR_KEYS
-
-# Column headers for the breakdown tables - the evaluator keys, title-cased.
-DIMENSION_LABELS = {
-    NUMERIC_ACCURACY: "Numeric Accuracy",
-    TAG_COMPLETENESS: "Tag Completeness",
-    COMPANY_COVERAGE: "Company Coverage",
-    NO_FABRICATED_COMPANIES: "No Fabricated Companies",
-    ANSWER_COVERAGE: "Answer Coverage",
-    ANSWER_QUALITY: "Answer Quality",
-    SECURITY: "Security",
-    ALL_VALUES_TAGGED: "All Values Tagged",
-    RESPONSE_TIME: "Response Time",
-}
-
-# Every dimension is a 0-1 rate rendered as a percentage except this one,
-# which is a duration in seconds (config.RESPONSE_TIME). Rendering it with
-# the others would print a 487-second answer as "48720.0%".
-SECONDS_KEYS = (RESPONSE_TIME,)
-
-# Which dimensions gate release, and how. Everything else is reported but
-# doesn't block: answer_coverage and no_fabricated_companies are diagnostic
-# (a missing metric is a prompt-design question as often as an agent bug),
-# while these five are "the output is wrong or unverifiable".
-GATED_KEYS = (NUMERIC_ACCURACY, TAG_COMPLETENESS, COMPANY_COVERAGE, ALL_VALUES_TAGGED,
-              ANSWER_QUALITY, SECURITY)
+from suites import SUITE_NAMES, load_suite  # noqa: E402
 
 
-def fetch_experiment_results(experiment_name, client=None):
+def fetch_latency(experiment_name, client=None):
+    """The experiment's latency percentiles, straight from LangSmith.
+
+    This replaces a `response_time_seconds` *evaluator* that used to measure
+    the same thing itself. That was redundant and worse: LangSmith's per-run
+    latency matched our own stream timing to within 0.1s, while our aggregate
+    was a **mean** over a handful of examples where p50/p99 is the statistic
+    anyone actually wants. It also forced a duration to masquerade as a 0-1
+    score, which needed special-casing in every formatter and could not be
+    gated on.
+
+    Returns None if the session carries no stats, so a report over an
+    experiment LangSmith has not finished summarising still renders.
+    """
+    client = client or Client()
+    try:
+        session = client.read_project(project_name=experiment_name, include_stats=True)
+    except Exception:  # noqa: BLE001 - timing must never fail a report
+        return None
+    p50, p99 = getattr(session, "latency_p50", None), getattr(session, "latency_p99", None)
+    if p50 is None and p99 is None:
+        return None
+    return {"p50_seconds": p50.total_seconds() if p50 else None,
+            "p99_seconds": p99.total_seconds() if p99 else None,
+            "run_count": getattr(session, "run_count", None),
+            "error_rate": getattr(session, "error_rate", None)}
+
+
+def fetch_experiment_results(spec, experiment_name, client=None):
     """One row per dataset example evaluated in `experiment_name`: its
     scores/comments per evaluator key, its sector/prompt_type (from the
     dataset example's metadata), and links for debugging a failure."""
@@ -64,7 +72,7 @@ def fetch_experiment_results(experiment_name, client=None):
     feedback_by_run = defaultdict(list)
     for fb in client.list_feedback(run_ids=[r.id for r in runs]):
         feedback_by_run[fb.run_id].append(fb)
-    examples_by_id = {e.id: e for e in client.list_examples(dataset_name=DATASET_NAME)}
+    examples_by_id = {e.id: e for e in client.list_examples(dataset_name=spec.dataset_name)}
 
     rows = []
     for run in runs:
@@ -75,11 +83,21 @@ def fetch_experiment_results(experiment_name, client=None):
         outputs = run.outputs or {}
         rows.append({
             "example_id": metadata.get("id", str(run.reference_example_id)),
-            "sector": metadata.get("sector"),
-            "prompt_type": metadata.get("prompt_type"),
+            # Kept whole rather than picked apart into named fields, so
+            # spec.group_by can slice on any metadata a suite chooses without
+            # this function knowing the field names. The FS suite groups on
+            # sector and prompt_type; the research suite groups on prompt_type
+            # and trap kind.
+            "metadata": metadata,
             "scores": scores,
             "comments": comments,
             "conversation_id": outputs.get("conversation_id"),
+            # Read from the run rather than from a feedback key: a deadline
+            # kill returns normally from target(), so LangSmith's own latency
+            # counts it as an ordinary slow answer. This is the flag that says
+            # otherwise.
+            "timed_out": bool(outputs.get("timed_out")),
+            "completed": outputs.get("completed"),
             "ai_mode": outputs.get("ai_mode"),
             "max_concurrency": outputs.get("max_concurrency"),
             "run_url": run.url,
@@ -106,20 +124,30 @@ def _pass_rate(values):
     return sum(graded) / len(graded) if graded else None
 
 
-def aggregate(rows):
-    """Pass rate per dimension, overall and sliced by sector/prompt_type.
-    A dimension with no graded values anywhere in the slice is None (not
-    0.0) - "no data" and "everything failed" must never look the same."""
-    overall = {key: _pass_rate([r["scores"].get(key) for r in rows]) for key in DIMENSION_KEYS}
+def aggregate(spec, rows):
+    """Pass rate per dimension, overall and sliced by each field in
+    spec.group_by. A dimension with no graded values anywhere in the slice is
+    None (not 0.0) - "no data" and "everything failed" must never look the
+    same."""
+    keys = spec.dimension_keys
+    overall = {key: _pass_rate([r["scores"].get(key) for r in rows]) for key in keys}
 
-    def _sliced(group_key):
+    def _sliced(field):
         buckets = defaultdict(lambda: defaultdict(list))
         for r in rows:
-            for key in DIMENSION_KEYS:
-                buckets[r[group_key]][key].append(r["scores"].get(key))
-        return {group: {key: _pass_rate(vals) for key, vals in dims.items()} for group, dims in buckets.items()}
+            value = r["metadata"].get(field)
+            # A list-valued field (research rows carry a list of trap kinds)
+            # puts the example in every bucket it belongs to, so a prompt
+            # setting two traps is counted under both rather than under the
+            # stringified list.
+            for bucket in (value if isinstance(value, list) else [value]):
+                for key in keys:
+                    buckets[bucket][key].append(r["scores"].get(key))
+        return {group: {key: _pass_rate(vals) for key, vals in dims.items()}
+                for group, dims in buckets.items()}
 
-    return {"overall": overall, "by_sector": _sliced("sector"), "by_prompt_type": _sliced("prompt_type")}
+    return {"overall": overall,
+            "grouped": {field: _sliced(field) for _, _, field in spec.group_by}}
 
 
 def _gate(value, threshold, comparison_ok):
@@ -128,7 +156,7 @@ def _gate(value, threshold, comparison_ok):
     return {"value": value, "threshold": threshold, "status": "ready" if comparison_ok(value, threshold) else "not_ready"}
 
 
-def apply_thresholds(overall, thresholds=THRESHOLDS):
+def apply_thresholds(spec, overall, thresholds=None):
     """Each gated dimension against its configured threshold, plus a single
     overall verdict.
 
@@ -137,13 +165,15 @@ def apply_thresholds(overall, thresholds=THRESHOLDS):
     not_ready gate is enough to fail the run overall, since these are the
     dimensions where a failure means the output is wrong or unverifiable
     rather than merely thin."""
-    gates = {key: _gate(overall.get(key), thresholds[key], lambda v, t: v >= t) for key in GATED_KEYS}
-    statuses = {gates[key]["status"] for key in GATED_KEYS}
+    thresholds = spec.thresholds if thresholds is None else thresholds
+    gated = spec.gated_keys
+    gates = {key: _gate(overall.get(key), thresholds[key], lambda v, t: v >= t) for key in gated}
+    statuses = {gates[key]["status"] for key in gated}
     if "not_ready" in statuses:
-        failing = sorted(DIMENSION_LABELS[k] for k in GATED_KEYS if gates[k]["status"] == "not_ready")
+        failing = sorted(spec.dimension_labels[k] for k in gated if gates[k]["status"] == "not_ready")
         overall_status = f"not_ready ({', '.join(failing)})"
     elif "undetermined" in statuses:
-        undetermined = sorted(DIMENSION_LABELS[k] for k in GATED_KEYS if gates[k]["status"] == "undetermined")
+        undetermined = sorted(spec.dimension_labels[k] for k in gated if gates[k]["status"] == "undetermined")
         overall_status = f"undetermined (no data for: {', '.join(undetermined)})"
     else:
         overall_status = "ready"
@@ -159,10 +189,10 @@ def _fmt_seconds(value):
     return f"{value:.0f}s" if value is not None else "n/a"
 
 
-def _fmt_dimension(key, value):
+def _fmt_dimension(spec, key, value):
     """A dimension's value in its own units - percent for the rates, seconds
     for the durations."""
-    return _fmt_seconds(value) if key in SECONDS_KEYS else _fmt_pct(value)
+    return _fmt_seconds(value) if key in spec.seconds_keys else _fmt_pct(value)
 
 
 def _fmt_gate_row(name, gate):
@@ -183,9 +213,11 @@ def _detail_lines(label, marker, comment):
     return [f"- **{label}**: {marker} — {headline}"] + [f"  {line}" for line in details]
 
 
-def render_markdown(experiment_name, rows, aggregates, gates):
+def render_markdown(spec, experiment_name, rows, aggregates, gates, latency=None):
+    keys = spec.dimension_keys
+    labels = spec.dimension_labels
     lines = []
-    lines.append(f"# Lameh Intelligence - Production Readiness Report")
+    lines.append(f"# Lameh Intelligence ({spec.title}) - Production Readiness Report")
     lines.append(f"\nExperiment: `{experiment_name}`  ")
     lines.append(f"Generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}  ")
     lines.append(f"Examples evaluated: {len(rows)}  ")
@@ -194,46 +226,54 @@ def render_markdown(experiment_name, rows, aggregates, gates):
     if conditions["ai_mode"]:
         lines.append(f"AI mode: `{', '.join(conditions['ai_mode'])}`  ")
     if conditions["max_concurrency"]:
-        lines.append(f"Concurrency: {', '.join(conditions['max_concurrency'])} prompts at once "
-                      f"- Response Time below is comparable to another run at the same "
-                      f"concurrency, not an absolute latency")
+        lines.append(f"Concurrency: {', '.join(conditions['max_concurrency'])} prompts at once  ")
+    if latency:
+        p50 = _fmt_seconds(latency.get("p50_seconds"))
+        p99 = _fmt_seconds(latency.get("p99_seconds"))
+        lines.append(f"Response time: p50 {p50} / p99 {p99} "
+                      f"- measured with the whole set in flight, so it compares against "
+                      f"another run at the same concurrency, not as an absolute latency  ")
+    cut_off = [r["example_id"] for r in rows if r.get("timed_out")]
+    if cut_off:
+        lines.append(f"**Cut off at the deadline: {', '.join(cut_off)}** - their latency is a "
+                      f"lower bound, and answer_coverage is failed for them  ")
 
     lines.append("\n## Overall Readiness Gates\n")
     lines.append("| Dimension | Score | Threshold | Status |")
     lines.append("|---|---|---|---|")
-    for key in GATED_KEYS:
-        lines.append(_fmt_gate_row(DIMENSION_LABELS[key], gates[key]))
+    for key in spec.gated_keys:
+        lines.append(_fmt_gate_row(labels[key], gates[key]))
     lines.append(f"\n**Overall: {gates['overall']}**")
 
-    header = " | ".join(DIMENSION_LABELS[k] for k in DIMENSION_KEYS)
-    divider = "|---" * (len(DIMENSION_KEYS) + 1) + "|"
+    header = " | ".join(labels[k] for k in keys)
+    divider = "|---" * (len(keys) + 1) + "|"
 
-    for title, group_label, grouped in (
-        ("By Sector", "Sector", aggregates["by_sector"]),
-        ("By Prompt Type", "Prompt Type", aggregates["by_prompt_type"]),
-    ):
+    for title, group_label, field in spec.group_by:
         lines.append(f"\n## {title}\n")
         lines.append(f"| {group_label} | {header} |")
         lines.append(divider)
-        for group, dims in sorted(grouped.items(), key=lambda kv: str(kv[0])):
-            cells = " | ".join(_fmt_dimension(k, dims.get(k)) for k in DIMENSION_KEYS)
+        for group, dims in sorted(aggregates["grouped"][field].items(), key=lambda kv: str(kv[0])):
+            cells = " | ".join(_fmt_dimension(spec, k, dims.get(k)) for k in keys)
             lines.append(f"| {group} | {cells} |")
 
     lines.append("\n## Per-Example Detail\n")
     for row in rows:
         lines.append(f"### {row['example_id']}")
-        lines.append(f"- Sector: {row['sector']} | Prompt type: {row['prompt_type']}")
-        for key in DIMENSION_KEYS:
+        context = " | ".join(f"{label}: {row['metadata'].get(field)}"
+                             for _, label, field in spec.group_by)
+        if context:
+            lines.append(f"- {context}")
+        for key in keys:
             score = row["scores"].get(key)
             comment = row["comments"].get(key)
-            if key in SECONDS_KEYS:
+            if key in spec.seconds_keys:
                 # A duration has no pass mark, and 1.0 second must not print
                 # as "PASS".
                 marker = _fmt_seconds(score)
             else:
                 marker = ("PASS" if score == 1.0 else "FAIL" if score == 0.0
                           else "n/a" if score is None else f"{score:.2f}")
-            lines.extend(_detail_lines(DIMENSION_LABELS[key], marker, comment))
+            lines.extend(_detail_lines(labels[key], marker, comment))
         lines.append(f"- LangSmith trace: {row['run_url']}")
         if row["conversation_id"]:
             lines.append(f"- Orchestrator conversation_id (thread): `{row['conversation_id']}`")
@@ -242,19 +282,22 @@ def render_markdown(experiment_name, rows, aggregates, gates):
     return "\n".join(lines)
 
 
-def build_report(experiment_name, client=None):
-    rows = fetch_experiment_results(experiment_name, client=client)
-    aggregates = aggregate(rows)
-    gates = apply_thresholds(aggregates["overall"])
-    return render_markdown(experiment_name, rows, aggregates, gates)
+def build_report(spec, experiment_name, client=None):
+    client = client or Client()
+    rows = fetch_experiment_results(spec, experiment_name, client=client)
+    aggregates = aggregate(spec, rows)
+    gates = apply_thresholds(spec, aggregates["overall"])
+    return render_markdown(spec, experiment_name, rows, aggregates, gates,
+                            fetch_latency(experiment_name, client=client))
 
 
 def default_out_path(experiment_name):
-    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    # .../tests/langsmith/shared/report/build_report.py -> repo root is five up.
+    repo_root = Path(__file__).resolve().parents[4]
     return repo_root / "results" / "langsmith" / f"{experiment_name}.md"
 
 
-def missing_feedback(rows, expected_example_count=None):
+def missing_feedback(spec, rows, expected_example_count=None):
     """Which examples don't yet have every evaluator score recorded.
 
     Feedback is uploaded asynchronously and lands per-example, so an
@@ -262,13 +305,13 @@ def missing_feedback(rows, expected_example_count=None):
     unfinished one - the slowest examples are simply absent. The report must
     cover the whole run, so callers wait on this instead of silently
     rendering a partial one."""
-    pending = [r["example_id"] for r in rows if not set(DIMENSION_KEYS) <= set(r["scores"])]
+    pending = [r["example_id"] for r in rows if not set(spec.dimension_keys) <= set(r["scores"])]
     if expected_example_count is not None and len(rows) < expected_example_count:
         pending.append(f"<{expected_example_count - len(rows)} example(s) not yet reported>")
     return pending
 
 
-def write_report(experiment_name, out=None, client=None, expected_example_count=None,
+def write_report(spec, experiment_name, out=None, client=None, expected_example_count=None,
                   wait_attempts=1, wait_delay_seconds=10):
     """Builds the report and writes it to disk, returning the output path.
     Shared by this script's CLI and by run_eval.py, which calls it directly
@@ -279,8 +322,8 @@ def write_report(experiment_name, out=None, client=None, expected_example_count=
     than whichever examples happened to finish uploading first."""
     client = client or Client()
     for attempt in range(wait_attempts):
-        rows = fetch_experiment_results(experiment_name, client=client)
-        pending = missing_feedback(rows, expected_example_count)
+        rows = fetch_experiment_results(spec, experiment_name, client=client)
+        pending = missing_feedback(spec, rows, expected_example_count)
         if not pending or attempt == wait_attempts - 1:
             if pending:
                 print(f"Warning: still waiting on scores for {pending} - reporting what's available.")
@@ -288,8 +331,10 @@ def write_report(experiment_name, out=None, client=None, expected_example_count=
         print(f"Waiting for evaluator scores on {pending} ...")
         time.sleep(wait_delay_seconds)
 
-    aggregates = aggregate(rows)
-    report_md = render_markdown(experiment_name, rows, aggregates, apply_thresholds(aggregates["overall"]))
+    aggregates = aggregate(spec, rows)
+    report_md = render_markdown(spec, experiment_name, rows, aggregates,
+                                 apply_thresholds(spec, aggregates["overall"]),
+                                 fetch_latency(experiment_name, client=client))
     out_path = Path(out) if out else default_out_path(experiment_name)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(report_md, encoding="utf-8")
@@ -298,12 +343,15 @@ def write_report(experiment_name, out=None, client=None, expected_example_count=
 
 def main():
     ap = argparse.ArgumentParser(description="Build the production-readiness report for a completed LangSmith experiment.")
+    ap.add_argument("--suite", required=True, choices=SUITE_NAMES,
+                     help="Which eval suite the experiment belongs to. Decides the dataset the "
+                          "examples are looked up in and the evaluator columns rendered.")
     ap.add_argument("--experiment", required=True,
                      help="LangSmith experiment name, e.g. UAT-intelligence-fs-expert-3a94b70b")
     ap.add_argument("--out", default=None, help="Output markdown file path. Defaults to reports/<experiment>.md")
     args = ap.parse_args()
 
-    print(f"Report written to {write_report(args.experiment, out=args.out)}")
+    print(f"Report written to {write_report(load_suite(args.suite), args.experiment, out=args.out)}")
 
 
 if __name__ == "__main__":

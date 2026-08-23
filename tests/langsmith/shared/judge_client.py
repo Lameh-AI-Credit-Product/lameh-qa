@@ -8,7 +8,7 @@ rubric in tests.
 
 from anthropic import AnthropicBedrock
 
-from config import AWS_ACCESS_KEY_ID, AWS_BEDROCK_MODEL_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY
+from env_config import AWS_ACCESS_KEY_ID, AWS_BEDROCK_MODEL_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY
 
 # The verdict is a JSON object carrying findings lists (untagged values, with
 # a quoted figure and surrounding context each), not just a few booleans - a

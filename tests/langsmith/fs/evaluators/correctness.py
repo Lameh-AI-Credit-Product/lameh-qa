@@ -31,6 +31,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared"))
 from extraction import display_precision  # noqa: E402
 from metrics import compare, tolerance_match, DEFAULT_TOLERANCE  # noqa: E402
 

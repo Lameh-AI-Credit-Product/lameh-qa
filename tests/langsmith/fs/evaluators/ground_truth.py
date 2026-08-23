@@ -31,9 +31,11 @@ from pathlib import Path
 
 import requests
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "shared"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import (CHART_DATA_ORGANIZATION_ID, CHART_DATA_URL,  # noqa: E402
-                     ORCHESTRATOR_API_KEY, SECTORS_GROUPED_URL)
+                     SECTORS_GROUPED_URL)
+from env_config import ORCHESTRATOR_API_KEY  # noqa: E402
 
 DEFAULT_TIMEOUT_SECONDS = 60
 

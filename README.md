@@ -30,13 +30,15 @@ For the E2E script, Playwright also needs its browser binaries installed once:
 poetry run playwright install chromium
 ```
 
-The E2E script, and the LangSmith eval suite, read their configuration (`BASE_URL`, `ENV`, LangSmith credentials, orchestrator/chart-data credentials, AWS Bedrock credentials for the LLM judge) from a `.env` file (gitignored, not committed). Copy `.env.example` to `.env` and fill in the real values:
+The E2E script, and the LangSmith eval suites, read their configuration (`BASE_URL`, `ENV`, LangSmith credentials, orchestrator credentials, AWS Bedrock credentials for the LLM judge) from a `.env` file (gitignored, not committed). Copy `.env.example` to `.env` and fill in the real values:
 
 ```
 cp .env.example .env
 ```
 
-`ENV` must be `DEV`, `UAT` or `CORE`, matching the deployment `BASE_URL` points at. It labels the Sector Analysis run folder (`data/sector-analysis/<ENV>-<timestamp>/`) and, through it, every report derived from that run — the three deployments export different ratio sets, so a run you can't attribute to one of them is hard to read later. The download refuses to start without it. It also names the LangSmith experiment (`<ENV>-intelligence-fs-<mode>-<hex>`), which tolerates it being unset and just drops that segment. Nothing checks it against `BASE_URL` or `LAMEH_ORCHESTRATOR_URL`, so keep them in step by hand.
+The eval suites read three separate organization-ids, each named for what consumes it: `LAMEH_ORGANIZATION_ID_FOR_INTELLIGENCE_EVAL` is the org the agent is called as, `LAMEH_CHART_DATA_ORGANIZATION_ID` is where the FS suite reads ground truth, and `LAMEH_BOARD_ANALYSIS_ORGANIZATION_ID` is where the research suite reads it when refreshing its frozen snapshot. They currently all hold the same value but stay separate knobs — "which org the agent runs as" and "which org holds the data we grade against" are different questions, and the orgs genuinely return different board-report data.
+
+`ENV` must be `DEV`, `UAT` or `CORE`, matching the deployment `BASE_URL` points at. It labels the Sector Analysis run folder (`data/sector-analysis/<ENV>-<timestamp>/`) and, through it, every report derived from that run — the three deployments export different ratio sets, so a run you can't attribute to one of them is hard to read later. The download refuses to start without it. It also names the LangSmith experiment (`<ENV>-intelligence-<suite>-<mode>-<hex>`), which tolerates it being unset and just drops that segment. Nothing checks it against `BASE_URL` or `LAMEH_ORCHESTRATOR_URL`, so keep them in step by hand.
 
 ## Usage
 
@@ -80,30 +82,41 @@ This reads the ratio labels straight out of the download script's source, so tha
 
 ### LangSmith eval suites (Lameh Intelligence)
 
-Two suites over one harness. Every command below exists in an `fs` and a `research` form; they take the same flags and differ only in what they grade.
+Two suites over one harness.
 
 | Suite | Dataset | Grades |
 |---|---|---|
 | `fs` | `FS-Intelligence` | financial-statement answers — are the stated numbers right, and can each be traced back to the database? |
 | `research` | `Research-Intelligence` | board-analysis answers — governance, related parties, workforce, projects, market data, HSE |
 
-Push a suite's prompt set to its LangSmith dataset (this also picks up edits to existing prompts, not just new ones):
+**To just run one:**
 
 ```
-poetry run poe langsmith-fs-build-dataset         # tests/langsmith/fs/dataset/prompt_set.json
-poetry run poe langsmith-research-build-dataset   # tests/langsmith/research/dataset/prompt_set.json
+poetry run poe langsmith-fs-run          # 8 prompts, ~10 min
+poetry run poe langsmith-research-run    # 6 prompts, ~3 min
 ```
 
-The research suite grades against a **frozen** snapshot of the board-report data rather than fetching it per run, so a score change means the agent changed and not the source. The snapshot is committed, and it rides along on each LangSmith example as its reference output — so the dashboard shows which source rows back each planted defect. Refresh it, or check whether it has gone stale, with:
+Each calls the live agent for every dataset example, scores the responses, uploads to LangSmith, and writes a markdown report to `results/langsmith/<suite>/<experiment>.md`. Nothing else needs running first — the dataset only needs syncing when you have edited it.
+
+The full command set:
+
+| | `fs` | `research` |
+|---|---|---|
+| run the eval | `poe langsmith-fs-run` | `poe langsmith-research-run` |
+| rebuild a report | `poe langsmith-fs-report --experiment <name>` | `poe langsmith-research-report --experiment <name>` |
+| sync the dataset | `poe langsmith-fs-build-dataset` | `poe langsmith-research-build-dataset` |
+| refresh ground truth | — (fetched live) | `poe langsmith-research-freeze` |
+
+Sync the dataset after editing a suite's `prompt_set.json`; it picks up edits to existing prompts, not just new rows.
+
+**The research suite's ground truth is frozen**, not fetched per run — so a score change means the agent changed and not the source. The snapshot (`tests/langsmith/research/dataset/ground_truth.json`) is committed, and rides along on each LangSmith example as its reference output, so the dashboard shows which source rows back each planted defect.
 
 ```
-poetry run poe langsmith-research-freeze           # refresh
-poetry run poe langsmith-research-freeze --check   # report drift only
+poetry run poe langsmith-research-freeze           # refresh the snapshot
+poetry run poe langsmith-research-freeze --check   # report drift only, write nothing
 ```
 
-A run warns loudly if the frozen snapshot no longer matches the live merge run, but never fails on it.
-
-Run the eval — calls the live agent for every dataset example (or just one via `--example-id`), scores each response, and uploads the results to LangSmith.
+Re-run `langsmith-research-build-dataset` after a refresh, so the dashboard's reference outputs match the file the evaluators now read. Every run checks the snapshot against the live merge run before it starts and warns loudly on a mismatch, but never fails on it — pass `--skip-drift-check` when offline.
 
 **FS evaluators:**
 
@@ -138,7 +151,7 @@ poetry run poe langsmith-fs-run       [--ai-mode expert|fast] [--example-id mate
 poetry run poe langsmith-research-run [--ai-mode expert|fast] [--example-id yamama-safety-metrics]     [--max-concurrency 6] [--report-out path/to/report.md] [--skip-report]
 ```
 
-Examples run in parallel, one per dataset row by default, so a whole dataset takes about as long as its slowest single prompt. Pass `--max-concurrency 1` to serialize. The two suites' defaults differ because their workloads do: an FS sector prompt is a ~7–10 minute agent call (8 at a time, 900s deadline), a research prompt answered in 135s when measured (6 at a time, 300s deadline).
+Examples run in parallel, one per dataset row by default, so a whole dataset takes about as long as its slowest single prompt. Pass `--max-concurrency 1` to serialize. The two suites' defaults differ because their workloads do: FS prompts measured p50 322s / p99 462s at 8-way concurrency (8 at a time, 900s deadline), research p50 107s / p99 138s at 6-way (6 at a time, 300s deadline).
 
 **Testing both AI modes.** The agent answers in expert mode or fast mode, and `--ai-mode` picks which (default `expert`). A run is one mode, so comparing them is two runs against the same dataset — which is what makes them comparable, since LangSmith's side-by-side comparison view only works within one dataset:
 

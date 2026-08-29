@@ -114,12 +114,28 @@ def existing_examples_by_prompt_id(client, dataset_id):
     return by_prompt_id
 
 
-def sync_dataset(spec, client=None, prompt_set_path=None, dataset_name=None):
-    """Ensures the suite's dataset exists and matches its prompt_set.json
-    exactly: creates examples for new `id`s, and pushes an update for any
-    existing example whose inputs/metadata have changed since it was last
-    synced (e.g. editing a prompt's wording and rerunning this).
-    Returns (created_count, updated_count)."""
+def sync_dataset(spec, client=None, prompt_set_path=None, dataset_name=None, prune=True):
+    """Makes the suite's dataset mirror its prompt_set.json: creates examples
+    for new `id`s, pushes an update for any existing example whose
+    inputs/metadata have changed since it was last synced (e.g. editing a
+    prompt's wording and rerunning this), and deletes examples whose `id` is
+    no longer in the file at all.
+
+    That last one is why the prompt set is the single source of truth rather
+    than a starting point. Without it, deleting a row was a no-op - the sync
+    reported `0 created, 0 updated` while the dropped prompt kept running in
+    every experiment, because run_eval reads its examples from LangSmith and
+    never opens this file.
+
+    Deleting is not free: a LangSmith example is what a past experiment's runs
+    point at, so removing one orphans those runs and the row vanishes from
+    that experiment's view. That is the right trade for a prompt genuinely
+    retired - stale rows in the dataset silently cost a full agent call per
+    run - but it is why the deletions are named in the output rather than
+    merely counted, and why `prune=False` (`--keep-orphans`) exists for a
+    sync you don't want removing anything.
+
+    Returns (created_count, updated_count, deleted_prompt_ids)."""
     client = client or Client()
     prompt_set_path = prompt_set_path or spec.prompt_set_path
     rows = load_prompt_set(prompt_set_path)
@@ -147,21 +163,34 @@ def sync_dataset(spec, client=None, prompt_set_path=None, dataset_name=None):
     for example_id, inputs, outputs, metadata in changed:
         client.update_example(example_id, inputs=inputs, outputs=outputs, metadata=metadata)
 
-    return len(new_rows), len(changed)
+    orphans = sorted(set(existing) - {row["id"] for row in rows})
+    if prune:
+        for prompt_id in orphans:
+            client.delete_example(existing[prompt_id].id)
+
+    return len(new_rows), len(changed), orphans
 
 
 def main():
     ap = argparse.ArgumentParser(description="Sync a suite's prompt_set.json into its LangSmith dataset.")
     ap.add_argument("--suite", required=True, choices=SUITE_NAMES,
                      help="Which eval suite to sync. Decides the dataset name and the prompt-set file.")
+    ap.add_argument("--keep-orphans", action="store_true",
+                     help="Leave examples that are no longer in prompt_set.json in the dataset. "
+                          "By default they are deleted, so the file is the single source of truth; "
+                          "use this when past experiments referencing them matter more.")
     args = ap.parse_args()
 
     load_dotenv()
     spec = load_suite(args.suite)
-    created, updated = sync_dataset(spec)
+    created, updated, orphans = sync_dataset(spec, prune=not args.keep_orphans)
     frozen = len(load_ground_truth(spec.prompt_set_path))
+    verb = "kept" if args.keep_orphans else "deleted"
     print(f"Dataset '{spec.dataset_name}': {created} example(s) created, {updated} example(s) updated"
+          + (f", {len(orphans)} {verb}" if orphans else "")
           + (f", {frozen} carrying frozen ground truth." if frozen else "."))
+    for prompt_id in orphans:
+        print(f"  {verb}: {prompt_id} (no longer in {Path(spec.prompt_set_path).name})")
 
 
 if __name__ == "__main__":

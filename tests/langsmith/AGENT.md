@@ -235,6 +235,15 @@ where several planted defects do not exist.
 
 - **Dataset rows are `prompt_set.json`.** Metadata keys drive what evaluators
   expect. Adding a prompt is a dataset edit; `build_dataset.py` never changes.
+  **Removing a row deletes its LangSmith example**, so the file is the single
+  source of truth in both directions. It has to be: `run_eval` takes its
+  examples from LangSmith and never opens the prompt set, so before the sync
+  pruned, a deleted row kept running in every experiment while the sync
+  reported `0 created, 0 updated` — which is exactly how it was found. The
+  deleted ids are named in the output, not just counted, because deleting an
+  example orphans the runs past experiments point at. `--keep-orphans` lists
+  them and deletes nothing. Only examples carrying an `id` in their metadata
+  are ever considered, so anything hand-added in the dashboard is untouched.
 - **`DATASET_NAME` is a pointer, not a name.** Editing it renames nothing —
   `get_or_create_dataset` will happily create an empty dataset under the new
   name and sync rows into it, leaving every past experiment attached to the

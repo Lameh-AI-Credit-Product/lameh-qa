@@ -249,9 +249,9 @@ class AnalysisPage(BasePage):
 
     COMPANY_NAME = 'xpath=//*[@id="split-container"]/div/div[1]/div[1]/div[1]/h1'
 
-    # The first table cell on the page that holds a value: the Income
-    # Statement's first data row, second <td> (the first holds the row
-    # label, the rest are the later periods).
+    # The value cell the pointer scenario clicks: the Income Statement's
+    # first data row, fifth <td> - the fourth period column (<td>[1] holds
+    # the row label, so the periods start at [2]).
     #
     # Rows carry the app's own composite id, "<statement>.<section>.<row>"
     # - semantic rather than a DOM position, so it survives layout
@@ -263,23 +263,25 @@ class AnalysisPage(BasePage):
     # Hence the structural first candidate. Two details in it are
     # load-bearing, both confirmed against the live UAT DOM:
     #
-    #   - `td[2]/div` excludes the section header row, whose id is the
+    #   - `td[5]/div` excludes the section header row, whose id is the
     #     same minus the row suffix ("...and all rows above it") and whose
     #     five <td>s are entirely empty. It sorts first in document order,
     #     so an unguarded [1] selects it and then waits out the full
-    #     timeout on a cell that will never have content.
+    #     timeout on a cell that will never have content. Guarding on the
+    #     same <td> we then click also means a row too short to have a
+    #     fourth period is skipped rather than matched and waited out.
     #   - the value sits three <div>s deep inside the <td>; the label
     #     column is only two deep, which is a second reason not to take
     #     td[1].
-    FIRST_VALUE_CELL = [
+    FOURTH_VALUE_CELL = [
         lambda page: page.locator(
-            'xpath=(//tr[starts-with(@id, "Income Statement.") and td[2]/div])[1]'
-            '/td[2]/div/div/div'),
+            'xpath=(//tr[starts-with(@id, "Income Statement.") and td[5]/div])[1]'
+            '/td[5]/div/div/div'),
         # The originally-reported form, kept as a last resort: an exact id
         # for a company whose first row is "Sales".
         lambda page: page.locator(
             'xpath=//*[@id="Income Statement.Net Profit/Loss for the period '
-            'and all rows above it.Sales"]/td[2]/div/div/div'),
+            'and all rows above it.Sales"]/td[5]/div/div/div'),
     ]
 
     def wait_for_navigation(self):
@@ -312,15 +314,15 @@ class AnalysisPage(BasePage):
     # not the pointer.
     POINTER_TIMEOUT_MS = 180_000
 
-    def wait_for_first_value_cell(self):
-        """The first value cell, once it is on screen and clickable.
+    def wait_for_fourth_value_cell(self):
+        """The fourth-period value cell, once on screen and clickable.
 
         The panel being visible (wait_until_loaded) does not mean the
         statement tables have rendered their numbers, so this is a real
         wait, not a lookup. Callers that time the click should do this
         first, outside the timer.
         """
-        return self.wait_first("analysis_first_value_cell", self.FIRST_VALUE_CELL)
+        return self.wait_first("analysis_fourth_value_cell", self.FOURTH_VALUE_CELL)
 
     def open_split_screen(self):
         """Open the source-document pane, unless it is already open.

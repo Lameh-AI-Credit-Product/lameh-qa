@@ -286,8 +286,8 @@ def scenario_first_pointer_load(pages, page, ctx):
     that wait is page load, which analysis_load_s already covers.
 
     Everything after that is measured: opening the split screen, the
-    source document rendering in it, the click on the first value cell,
-    and the highlight overlay reaching "opacity: 1". So this is not a
+    source document rendering in it, the click on the fourth-period
+    value cell, and the highlight overlay reaching "opacity: 1". So this is not a
     pointer latency in isolation - it is dominated by the document pane
     coming up, and it moves when either that or the pointer changes.
     Splitting the two would mean timing the pane separately; the whole
@@ -299,7 +299,7 @@ def scenario_first_pointer_load(pages, page, ctx):
     overlay does survive, waiting for the style to *change* is what stops
     a stale one being read as this click's response.
     """
-    cell = pages.analysis.wait_for_first_value_cell()
+    cell = pages.analysis.wait_for_fourth_value_cell()
     previous = pages.analysis.get_active_value_overlay_style()
 
     with Timer() as t:

@@ -98,11 +98,11 @@ REPORT_RETRY_DELAY_SECONDS = 10
 
 # Each prompt is a 7-10 minute agent call that's almost entirely network wait,
 # so examples are run in parallel by default - one per dataset row, currently
-# 8 (4 prompt types x 2 sectors). Anything lower runs the set in waves and
+# 12 (6 prompt types x 2 sectors). Anything lower runs the set in waves and
 # multiplies wall time by the number of waves. Lower it via --max-concurrency
 # if the orchestrator starts rate-limiting or the parallel load skews response
 # times; raise it in step with the dataset.
-DEFAULT_MAX_CONCURRENCY = 8
+DEFAULT_MAX_CONCURRENCY = 12
 
 # Wall-clock budget per prompt, overridable with --agent-timeout. Module-level
 # because LangSmith calls target() itself and gives us nowhere to pass it. The

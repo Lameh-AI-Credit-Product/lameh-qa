@@ -27,15 +27,18 @@ poetry run poe langsmith-fs-report --experiment <name>   # rebuild a report only
 ```
 
 A full run is ~10 minutes: the prompts run in parallel at 7–10 min each, plus
-under a minute of evaluator overhead. The set is 4 prompt types × 2 sectors
-(Materials, Health Care Equipment & Svc) = 8 rows, so a run is also 32 judge
-calls. Useful flags on `langsmith-fs-run`:
+under a minute of evaluator overhead. The set is 6 prompt types × 2 sectors
+(Materials, Health Care Equipment & Svc) = 12 rows, so a run is also 48 judge
+calls. Four of the six are the analysis-heavy prompts (q1–q4); q5 and q6 are
+deliberately simple single-metric lookups — one or two companies, one metric,
+one or two fiscal years — so a failure there is unambiguous rather than
+tangled up in a multi-part question. Useful flags on `langsmith-fs-run`:
 
 - `--ai-mode expert|instant` — default `expert`; `fast` is an alias for
   `instant`, which is what the API actually calls fast mode. See "The two AI
   modes" below
 - `--example-id materials-q1-cash-quality` — one prompt only, for a fast loop
-- `--max-concurrency N` — default 8 (= the dataset size); use 1 to serialize
+- `--max-concurrency N` — default 12 (= the dataset size); use 1 to serialize
 - `--agent-timeout SECONDS` — default 900; a prompt past it is cut off, scored
   on the text that arrived, and fails `answer_coverage` as truncated
 - `--skip-report`

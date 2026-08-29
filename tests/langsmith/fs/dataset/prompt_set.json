@@ -82,6 +82,38 @@
     "input": "For Al Taiseer Group Talco Industrial Co. , Almasane Alkobra Mining Co. , Saudi Aramco Base Oil Co.  Saudi Paper Manufacturing Co. and Watani Iron Steel Co.  provide a comprehensive overview covering:\n- Operational metrics (e.g., revenue growth, margins, efficiency ratios)\n- Market metrics (e.g., P/E, market cap, EV/EBITDA if data available)\n- Financial health metrics (e.g., liquidity, leverage, profitability ratios)\n\nReason through which metrics are most relevant given this\ncompany's sector, and cite sources for all figures used."
   },
   {
+    "id": "materials-q5-net-profit-lookup",
+    "sector": "Materials",
+    "prompt_type": "single-metric-lookup",
+    "scope": "companies",
+    "companies": [
+      "شركة الجبس الأهلية"
+    ],
+    "fiscal_years": ["FY2024"],
+    "metrics_expected": [
+      "Net Profit for the Period"
+    ],
+    "requires_source_citation": true,
+    "qualitative_checks": [],
+    "input": "What was Net Profit for the Period for شركة الجبس الأهلية in FY2024?\n\nCite the source financial statement and line item for the figure."
+  },
+  {
+    "id": "materials-q6-total-assets-trend",
+    "sector": "Materials",
+    "prompt_type": "single-company-metric-trend",
+    "scope": "companies",
+    "companies": [
+      "شركة التعدين العربية السعودية"
+    ],
+    "fiscal_years": ["FY2023", "FY2024"],
+    "metrics_expected": [
+      "Total Assets"
+    ],
+    "requires_source_citation": true,
+    "qualitative_checks": [],
+    "input": "Report Total Assets for شركة التعدين العربية السعودية for FY2023 and FY2024,\nand state the change between the two years.\n\nCite the source financial statement and line item for each figure."
+  },
+  {
     "id": "healthcare-q1-cash-quality",
     "sector": "Health Care Equipment & Svc",
     "prompt_type": "multi-metric-comparison-with-qualitative-analysis",
@@ -162,5 +194,38 @@
       "metric_selection_reasoning"
     ],
     "input": "For Canadian Medical Center Co., Dr. Sulaiman Al Habib Medical Services Group, Lana Medical Co., Middle East Healthcare Co., and Mouwasat Medical Services Co., provide a comprehensive overview covering:\n- Operational metrics (e.g., revenue growth, margins, efficiency ratios)\n- Market metrics (e.g., P/E, market cap, EV/EBITDA if data available)\n- Financial health metrics (e.g., liquidity, leverage, profitability ratios)\n\nReason through which metrics are most relevant given this\ncompany's sector, and cite sources for all figures used."
+  },
+  {
+    "id": "healthcare-q5-roe-lookup",
+    "sector": "Health Care Equipment & Svc",
+    "prompt_type": "single-metric-lookup",
+    "scope": "companies",
+    "companies": [
+      "مجموعة الدكتور سليمان الحبيب للخدمات الطبية"
+    ],
+    "fiscal_years": ["FY2024"],
+    "metrics_expected": [
+      "Return on Equity (ROE)"
+    ],
+    "requires_source_citation": true,
+    "qualitative_checks": [],
+    "input": "What was Return on Equity (ROE) for Dr. Sulaiman Al Habib Medical Services Group in FY2024?\n\nShow the inputs used to arrive at it, and cite the source financial statement and line\nitem for each."
+  },
+  {
+    "id": "healthcare-q6-net-profit-comparison",
+    "sector": "Health Care Equipment & Svc",
+    "prompt_type": "two-company-metric-comparison",
+    "scope": "companies",
+    "companies": [
+      "شركة المواساة للخدمات الطبية",
+      "مجموعة الدكتور سليمان الحبيب للخدمات الطبية"
+    ],
+    "fiscal_years": ["FY2024"],
+    "metrics_expected": [
+      "Net Profit for the Period"
+    ],
+    "requires_source_citation": true,
+    "qualitative_checks": [],
+    "input": "Compare Net Profit for the Period in FY2024 for Mouwasat Medical Services Co. and\nDr. Sulaiman Al Habib Medical Services Group. State which is higher and by how much.\n\nCite the source financial statement and line item for each figure."
   }
 ]

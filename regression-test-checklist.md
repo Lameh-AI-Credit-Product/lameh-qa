@@ -27,15 +27,15 @@ Lightweight checklist for quick regression passes (e.g. Dev → UAT merges), der
   - [ ] Bulk import
   - [ ] File-by-file import
 - [ ] **Merge**
-  - [ ] Auto-triggers after 3rd board report processed (not just uploaded/clicked)
-  - [ ] Auto-updates on 4+ files
+  - [ ] Auto-triggers after 2nd board report processed (not just uploaded/clicked)
+  - [ ] Auto-updates on 3+ files
   - [ ] Field completeness post-merge (e.g. Annual Capacity, Daily Capacity, sector-specific fees)
 - [ ] **Intelligence use of Research tools**
   - [ ] Agent correctly pulls merged board report data into Research-page prompts
 
 ## Sector Analysis
 
-- [ ] **Ratios** — pre-calculated values match recomputation (script: `sector_analysis_ratios.py --fail-only`)
+- [ ] **Ratios** — pre-calculated values match recomputation (script: `poetry run poe sector-analysis-audit --web-only`)
 - [ ] **Statement data** — displayed line items match FS source and match View Analysis for same company
 - [ ] **Macro sector aggregates** — avg / min / max / sum
   - [ ] Computed over correct company/period set
@@ -70,7 +70,19 @@ Lightweight checklist for quick regression passes (e.g. Dev → UAT merges), der
 
 ## Performance
 
-- [ ] Page load time (Dev vs UAT vs Core)
+Run once per environment (set `ENV` and `BASE_URL` in `.env` first — the run
+folder is named after `ENV`), then compare the three run directories:
+
+```
+poetry run poe perf --runs 5
+poetry run poe perf-compare results/perf/DEV-<timestamp> results/perf/UAT-<timestamp> results/perf/CORE-<timestamp>
+```
+
+The first directory given is the baseline every delta is measured against.
+Deltas under 5% are reported as unchanged; check the min–max whiskers before
+believing a larger one.
+
+- [ ] Page load time (Dev vs UAT vs Core) — `poe perf --runs 5` per env, then `poe perf-compare`
 - [ ] AI response time (Dev vs UAT vs Core)
 - [ ] Note environment factors (e.g. unstable connection) that could skew results
 

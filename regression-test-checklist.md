@@ -1,8 +1,19 @@
 # Regression Test Checklist
 
-Lightweight checklist for quick regression passes (e.g. Dev → UAT merges), derived from the [QA Scope Map](qa-scope-map.md). Check element + sub-element, not full known-risk-area depth — use the scope map for the "why" behind each item.
+Lightweight checklist for quick regression passes (e.g. Dev → UAT merges), derived from the [QA Scope Map](QA-SCOPE.md). Check element + sub-element, not full known-risk-area depth — use the scope map for the "why" behind each item.
 
 ---
+
+## Data Sync (FS upload → downstream)
+
+*(Cross-module — one pass, verified in three places. Run early: later
+sections read better against freshly ingested data.)*
+- [ ] Upload a new financial statement file to a company
+- [ ] Processing completes (wait for the finish signal, not the upload
+      returning — see the merge-trigger race in the scope map)
+- [ ] New values appear in **View Analysis**
+- [ ] New values appear in **Sector Analysis** (ratios recalculated from them)
+- [ ] New values appear in the **exported Excel**
 
 ## View Analysis
 
@@ -14,6 +25,7 @@ Lightweight checklist for quick regression passes (e.g. Dev → UAT merges), der
   - [ ] Update propagates to Sector Analysis, Intelligence, Excel export
   - [ ] Private org account cannot update a public-org company's values
   - [ ] Public-org update is visible to private org accounts
+- [ ] New-upload propagation — see [Data Sync](#data-sync-fs-upload--downstream)
 - [ ] **Export to Excel**
   - [ ] Export works across company list (not just a sample)
   - [ ] No company fails, times out, or produces empty/partial workbook

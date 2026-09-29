@@ -1,5 +1,7 @@
 # Sector Analysis Ratio Verification — Agent Context
 
+> **Vocabulary and scope.** Use the words in [MOHAMMED-VOCAB.md](MOHAMMED-VOCAB.md); it wins over wording elsewhere in this repo. The current testing scope and deadline are in [MOHAMMED-TESTING-CASES.md](MOHAMMED-TESTING-CASES.md).
+
 > Scope note: this file covers `tests/integration/sector_analysis_ratios.py`
 > only — one step of a five-step pipeline. The others document themselves in
 > their module docstrings, which are the primary documentation for them:

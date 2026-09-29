@@ -4,6 +4,8 @@ QA tooling and scope documentation for the Lameh platform.
 
 ## Contents
 
+- **[MOHAMMED-VOCAB.md](MOHAMMED-VOCAB.md)** — from Mohammed: the words we use, one meaning each. Wins over any other wording in this repo.
+- **[MOHAMMED-TESTING-CASES.md](MOHAMMED-TESTING-CASES.md)** — from Mohammed: what must be tested and reliable by 6 October 2026, grouped by engineer.
 - **[QA-SCOPE.md](QA-SCOPE.md)** — one-page inventory of what needs testing across the platform (modules, testing types, known risk areas).
 - **[AGENT.md](AGENT.md)** — detailed developer/agent notes for `tests/integration/sector_analysis_ratios.py`.
 - **`tests/sector_analysis_audit.py`** — runs the whole Sector Analysis pipeline in order (download → verify → summarize → coverage → emptiness), passing each step's output directory to the next instead of you copying paths between five commands. `--run-dir` starts from the verification step against a download you already have, which is the common case since the download is slow and needs a human at the OTP prompt.

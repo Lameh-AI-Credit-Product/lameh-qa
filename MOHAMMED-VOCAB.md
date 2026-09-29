@@ -78,8 +78,9 @@ GSTAT and SAMA are variations of the research data workflow.
 
 | Word | Meaning | Client |
 |---|---|---|
-| **General agent capability** | One item: upload a document and question it; **preference**; create presentations; web search; PDF download. | B and S |
-| **Preference** | User memory. It persists across sessions. | |
+| **General agent capability** | One item: upload a document and question it; **preference**; create presentations; web search; PDF download. Mohammed also calls this **"ChatGPT capability"**; same thing. It includes the workspace working reliably, and a **model selector** for frontier, open-source and flash models (K3, Kimi), not usable until credit covers it, implemented on Sonnet or Terra. | B and S |
+| **Preference** | User memory, outside the chat and **global per user**. Less output; things the user likes; things to remember automatically, for example he was analysing the price of wheat and now asks about an F&B company. | |
+| **Depth** | The one variable that separates pattern from playbook. Make it a variable, not two products. | |
 | **Pattern** | A **medium template**. A fixed question set run through Intelligence in about 10 minutes. Company overview: P/E, valuation, profit margins, growth, main segments and their profit, EBITDA. The infrastructure exists; the template and expected output come from Mohammed. | B |
 | **Playbook** | A **long** analysis, one to two hours. Business model, main clients, main investors. This is the pre-done analysis. Runs in Scapula. | S |
 | **Scapula** | The name in the front end and the orchestrator for the engine that runs a playbook and keeps asking itself questions. Making it reliable is Ashraf's; the template and expected output are Mohammed's. | S |
@@ -110,6 +111,8 @@ Custom AI variables                any variable by query: rent expenses, executi
 | Healthcare | hospitals, number of patients |
 | Education | number of students, number of campuses |
 
+The agent call that classifies them also covers **future statements** and **important data that is not connected**.
+
 **Medium critical** is defined later by Mohammed. **Not critical** is everything else.
 
 ---
@@ -119,6 +122,7 @@ Custom AI variables                any variable by query: rent expenses, executi
 - **Client B**: pattern, funds overview, upload all funds, general agent capability.
 - **Client S**: playbook in Scapula, general agent capability.
 - **Environments**: `DEV`, `UAT`, `CORE`. Every test result names its environment.
+- **Linear labels that are a rule**: `Eval1` is Mohammed's marker for things he will put into evals or wants to keep so he does not miss them; `one` stays as it is. Never retire, rename or remove either.
 
 ---
 
